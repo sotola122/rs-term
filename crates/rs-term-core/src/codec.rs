@@ -195,20 +195,34 @@ pub(crate) fn split_paste(text: &str) -> Vec<PastePiece> {
 
 pub(crate) struct NewlineConverter {
     mode: ReceiveNewline,
-    pending_cr: bool,
+    /// Auto mode only: the last byte was a CR that has already been passed
+    /// on. If the next byte is LF the pair is complete; otherwise an LF is
+    /// added first. Nothing is held back, so a CR at the end of a chunk is
+    /// shown at once (review N14).
+    after_cr: bool,
 }
 
 impl NewlineConverter {
     pub(crate) fn new(mode: ReceiveNewline) -> Self {
         Self {
             mode,
-            pending_cr: false,
+            after_cr: false,
         }
     }
 
     pub(crate) fn set_mode(&mut self, mode: ReceiveNewline) {
         self.mode = mode;
-        self.pending_cr = false;
+        self.after_cr = false;
+    }
+
+    /// Complete a CR that ended the stream: an isolated CR is CR LF in Auto.
+    /// Call before a mode change and at the end of a connection.
+    pub(crate) fn finish(&mut self) -> Vec<u8> {
+        if std::mem::take(&mut self.after_cr) {
+            b"\n".to_vec()
+        } else {
+            Vec::new()
+        }
     }
 
     pub(crate) fn push(&mut self, utf8: &[u8]) -> Vec<u8> {
@@ -241,35 +255,20 @@ impl NewlineConverter {
 
     fn push_auto(&mut self, input: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(input.len() + 8);
-        let mut data = input;
-        if self.pending_cr {
-            self.pending_cr = false;
-            if data.first() == Some(&b'\n') {
-                out.extend_from_slice(b"\r\n");
-                data = &data[1..];
-            } else {
-                out.extend_from_slice(b"\r\n");
-            }
-        }
-        let mut index = 0;
-        while index < data.len() {
-            if data[index] == b'\r' {
-                if index + 1 < data.len() && data[index + 1] == b'\n' {
-                    out.extend_from_slice(b"\r\n");
-                    index += 2;
-                } else if index + 1 == data.len() {
-                    self.pending_cr = true;
-                    break;
-                } else {
-                    out.extend_from_slice(b"\r\n");
-                    index += 1;
+        for &byte in input {
+            if std::mem::take(&mut self.after_cr) {
+                out.push(b'\n');
+                if byte == b'\n' {
+                    continue;
                 }
-            } else if data[index] == b'\n' {
-                out.extend_from_slice(b"\r\n");
-                index += 1;
-            } else {
-                out.push(data[index]);
-                index += 1;
+            }
+            match byte {
+                b'\r' => {
+                    out.push(b'\r');
+                    self.after_cr = true;
+                }
+                b'\n' => out.extend_from_slice(b"\r\n"),
+                other => out.push(other),
             }
         }
         out
@@ -342,12 +341,18 @@ mod tests {
 
     #[test]
     fn auto_holds_a_cr_across_chunks() {
+        // A CR at the end of a chunk is passed on at once; the LF of an
+        // isolated CR follows with the next byte or at `finish`.
         let mut nl = NewlineConverter::new(ReceiveNewline::Auto);
-        assert_eq!(nl.push(b"a\r"), b"a");
-        assert_eq!(nl.push(b"\nb"), b"\r\nb");
+        assert_eq!(nl.push(b"a\r"), b"a\r");
+        assert_eq!(nl.push(b"\nb"), b"\nb");
         let mut lone = NewlineConverter::new(ReceiveNewline::Auto);
-        assert_eq!(lone.push(b"a\r"), b"a");
-        assert_eq!(lone.push(b"b"), b"\r\nb");
+        assert_eq!(lone.push(b"a\r"), b"a\r");
+        assert_eq!(lone.push(b"b"), b"\nb");
+        let mut end = NewlineConverter::new(ReceiveNewline::Auto);
+        assert_eq!(end.push(b"x\r"), b"x\r");
+        assert_eq!(end.finish(), b"\n");
+        assert_eq!(end.finish(), b"");
     }
 
     #[test]

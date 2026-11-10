@@ -1,8 +1,9 @@
 //! `alacritty_terminal::Term` plus the VTE processor.
 //!
 //! Bytes that reach the processor are already UTF-8. Shift_JIS never does.
-//! A second processor records the characters and newlines the handler is
-//! asked to show, which is the text log. CSI and OSC do not call `input`.
+//! There is one processor. Its handler is `Logged`, which forwards every
+//! call to `Term` and, in the same call, records the characters and newlines
+//! for the text log (§5.10, review R19). CSI and OSC do not call `input`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,7 +14,12 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
-use alacritty_terminal::vte::ansi::{self, Color, Handler, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{
+    self, Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler,
+    Hyperlink, KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode,
+    NamedColor, PrivateMode, Processor, Rgb as VteRgb,
+    StandardCharset, TabulationClearMode,
+};
 
 use crate::codec::{Codec, Newline, NewlineConverter, SessionEncoding};
 
@@ -169,37 +175,156 @@ impl EventListener for ReplyListener {
     }
 }
 
-struct TextLog<'a> {
-    out: &'a mut Vec<TextAtom>,
+/// G0 to G3 and the active set, so the log maps DEC line drawing the same
+/// way `Term` does.
+#[derive(Clone, Copy, Default)]
+struct Charsets {
+    sets: [StandardCharset; 4],
+    active: usize,
 }
 
-impl Handler for TextLog<'_> {
+impl Charsets {
+    fn map(&self, c: char) -> char {
+        self.sets[self.active].map(c)
+    }
+}
+
+fn charset_slot(index: CharsetIndex) -> usize {
+    match index {
+        CharsetIndex::G0 => 0,
+        CharsetIndex::G1 => 1,
+        CharsetIndex::G2 => 2,
+        CharsetIndex::G3 => 3,
+    }
+}
+
+/// The handler `Processor::advance` drives. Every call goes to `Term`; the
+/// text calls are also appended to `out` in the same order.
+struct Logged<'a> {
+    term: &'a mut Term<ReplyListener>,
+    out: &'a mut Vec<TextAtom>,
+    charsets: &'a mut Charsets,
+}
+
+macro_rules! forward {
+    ($( fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* ); )*) => {
+        $(
+            fn $name(&mut self $(, $arg: $ty)*) {
+                <Term<ReplyListener> as Handler>::$name(self.term $(, $arg)*)
+            }
+        )*
+    };
+}
+
+impl Handler for Logged<'_> {
     fn input(&mut self, c: char) {
-        self.out.push(TextAtom::Char(c));
+        self.out.push(TextAtom::Char(self.charsets.map(c)));
+        self.term.input(c);
     }
     fn carriage_return(&mut self) {
         self.out.push(TextAtom::Cr);
+        self.term.carriage_return();
     }
     fn linefeed(&mut self) {
         self.out.push(TextAtom::Lf);
+        self.term.linefeed();
     }
     fn newline(&mut self) {
         self.out.push(TextAtom::Lf);
+        self.term.newline();
     }
     fn backspace(&mut self) {
         self.out.push(TextAtom::Bs);
+        self.term.backspace();
     }
     fn put_tab(&mut self, count: u16) {
         for _ in 0..count {
             self.out.push(TextAtom::Tab);
         }
+        self.term.put_tab(count);
+    }
+    fn set_active_charset(&mut self, index: CharsetIndex) {
+        self.charsets.active = charset_slot(index);
+        self.term.set_active_charset(index);
+    }
+    fn configure_charset(&mut self, index: CharsetIndex, charset: StandardCharset) {
+        self.charsets.sets[charset_slot(index)] = charset;
+        self.term.configure_charset(index, charset);
+    }
+    fn reset_state(&mut self) {
+        *self.charsets = Charsets::default();
+        self.term.reset_state();
+    }
+
+    // `Term` leaves set_mouse_cursor_icon, set_modify_other_keys,
+    // report_modify_other_keys and set_scp at the trait defaults (no-ops), so
+    // they are not forwarded.
+    forward! {
+        fn set_title(&mut self, title: Option<String>);
+        fn set_cursor_style(&mut self, style: Option<CursorStyle>);
+        fn set_cursor_shape(&mut self, shape: CursorShape);
+        fn goto(&mut self, line: i32, col: usize);
+        fn goto_line(&mut self, line: i32);
+        fn goto_col(&mut self, col: usize);
+        fn insert_blank(&mut self, count: usize);
+        fn move_up(&mut self, count: usize);
+        fn move_down(&mut self, count: usize);
+        fn identify_terminal(&mut self, intermediate: Option<char>);
+        fn device_status(&mut self, arg: usize);
+        fn move_forward(&mut self, col: usize);
+        fn move_backward(&mut self, col: usize);
+        fn move_down_and_cr(&mut self, row: usize);
+        fn move_up_and_cr(&mut self, row: usize);
+        fn bell(&mut self);
+        fn substitute(&mut self);
+        fn set_horizontal_tabstop(&mut self);
+        fn scroll_up(&mut self, count: usize);
+        fn scroll_down(&mut self, count: usize);
+        fn insert_blank_lines(&mut self, count: usize);
+        fn delete_lines(&mut self, count: usize);
+        fn erase_chars(&mut self, count: usize);
+        fn delete_chars(&mut self, count: usize);
+        fn move_backward_tabs(&mut self, count: u16);
+        fn move_forward_tabs(&mut self, count: u16);
+        fn save_cursor_position(&mut self);
+        fn restore_cursor_position(&mut self);
+        fn clear_line(&mut self, mode: LineClearMode);
+        fn clear_screen(&mut self, mode: ClearMode);
+        fn clear_tabs(&mut self, mode: TabulationClearMode);
+        fn set_tabs(&mut self, interval: u16);
+        fn reverse_index(&mut self);
+        fn terminal_attribute(&mut self, attr: Attr);
+        fn set_mode(&mut self, mode: Mode);
+        fn unset_mode(&mut self, mode: Mode);
+        fn report_mode(&mut self, mode: Mode);
+        fn set_private_mode(&mut self, mode: PrivateMode);
+        fn unset_private_mode(&mut self, mode: PrivateMode);
+        fn report_private_mode(&mut self, mode: PrivateMode);
+        fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>);
+        fn set_keypad_application_mode(&mut self);
+        fn unset_keypad_application_mode(&mut self);
+        fn set_color(&mut self, index: usize, color: VteRgb);
+        fn dynamic_color_sequence(&mut self, prefix: String, index: usize, terminator: &str);
+        fn reset_color(&mut self, index: usize);
+        fn clipboard_store(&mut self, clipboard: u8, data: &[u8]);
+        fn clipboard_load(&mut self, clipboard: u8, terminator: &str);
+        fn decaln(&mut self);
+        fn push_title(&mut self);
+        fn pop_title(&mut self);
+        fn text_area_size_pixels(&mut self);
+        fn text_area_size_chars(&mut self);
+        fn set_hyperlink(&mut self, link: Option<Hyperlink>);
+        fn report_keyboard_mode(&mut self);
+        fn push_keyboard_mode(&mut self, mode: KeyboardModes);
+        fn pop_keyboard_modes(&mut self, to_pop: u16);
+        fn set_keyboard_mode(&mut self, mode: KeyboardModes, behavior: KeyboardModesApplyBehavior);
     }
 }
 
 pub(crate) struct Screen {
     term: Term<ReplyListener>,
     parser: Processor,
-    log_parser: Processor,
+    charsets: Charsets,
     codec: Codec,
     newlines: NewlineConverter,
     replies: Rc<RefCell<Vec<Vec<u8>>>>,
@@ -240,7 +365,7 @@ impl Screen {
         Self {
             term,
             parser: Processor::new(),
-            log_parser: Processor::new(),
+            charsets: Charsets::default(),
             codec: Codec::new(encoding),
             newlines: NewlineConverter::new(newline.receive),
             replies,
@@ -255,9 +380,16 @@ impl Screen {
         self.feed_utf8(&decoded)
     }
 
-    pub(crate) fn finish_codec(&mut self) -> ApplyOutcome {
+    /// End of a connection: an incomplete lead becomes U+FFFD, a held CR is
+    /// completed, and the parser forgets a half escape sequence. The charset
+    /// state stays, because `Term` keeps it too.
+    pub(crate) fn finish_stream(&mut self) -> ApplyOutcome {
         let flushed = self.codec.reset();
-        self.feed_utf8(&flushed)
+        let mut converted = self.newlines.push(&flushed);
+        converted.extend(self.newlines.finish());
+        let outcome = self.feed_converted(&converted);
+        self.parser = Processor::new();
+        outcome
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: SessionEncoding) -> ApplyOutcome {
@@ -265,16 +397,26 @@ impl Screen {
         self.feed_utf8(&flushed)
     }
 
-    pub(crate) fn set_newline(&mut self, newline: Newline) {
+    pub(crate) fn set_newline(&mut self, newline: Newline) -> ApplyOutcome {
+        let held = self.newlines.finish();
+        let outcome = self.feed_converted(&held);
         self.newlines.set_mode(newline.receive);
+        outcome
     }
 
     fn feed_utf8(&mut self, decoded: &[u8]) -> ApplyOutcome {
         let converted = self.newlines.push(decoded);
+        self.feed_converted(&converted)
+    }
+
+    fn feed_converted(&mut self, converted: &[u8]) -> ApplyOutcome {
         let mut text = Vec::new();
-        self.log_parser
-            .advance(&mut TextLog { out: &mut text }, &converted);
-        self.parser.advance(&mut self.term, &converted);
+        let mut handler = Logged {
+            term: &mut self.term,
+            out: &mut text,
+            charsets: &mut self.charsets,
+        };
+        self.parser.advance(&mut handler, converted);
         ApplyOutcome {
             text,
             replies: self.replies.borrow_mut().drain(..).collect(),

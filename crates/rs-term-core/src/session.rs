@@ -1,15 +1,23 @@
 //! One serial session and the terminal it feeds.
 //!
-//! `apply_rx` order is fixed: binary log, decode, receive newline, both
-//! processors, text log, then raw `PtyWrite` replies. The keyboard and paste
-//! enter only through `apply_input`.
+//! `apply_rx` order is fixed: binary log, decode, receive newline, one
+//! processor whose handler also feeds the text log, then raw `PtyWrite`
+//! replies. The keyboard and paste enter only through `apply_input`.
+//!
+//! Opening a port is split in three so the blocking `open` can run off the
+//! UI thread: `begin_connect` (UI thread), `PendingOpen::open` (any thread),
+//! `finish_connect` (UI thread). Closing never waits on the UI thread: the
+//! command sender is dropped and the thread is reaped by `tick`.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread;
+use std::task::Poll;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use futures_channel::mpsc::{Receiver, TryRecvError};
+use futures_channel::mpsc::{Receiver, UnboundedReceiver};
 
 use crate::codec::{self, Newline, PastePiece, SessionEncoding};
 use crate::error::{LogError, OpenError, PortError, SessionError};
@@ -95,17 +103,71 @@ pub enum Link {
     },
 }
 
+/// Events of one open port. Status events (loss, failures, pins, dropped
+/// count) come first and never wait behind a full data channel.
 pub struct EventRx {
-    rx: Receiver<IoEvent>,
+    data: Receiver<IoEvent>,
+    status: UnboundedReceiver<IoEvent>,
+    status_closed: bool,
+    data_closed: bool,
 }
 
 impl EventRx {
-    pub async fn recv(&mut self) -> Option<IoEvent> {
-        self.rx.recv().await.ok()
+    fn new(channels: serial::Channels) -> Self {
+        Self {
+            data: channels.data,
+            status: channels.status,
+            status_closed: false,
+            data_closed: false,
+        }
     }
 
-    pub fn try_recv(&mut self) -> Result<IoEvent, TryRecvError> {
-        self.rx.try_recv()
+    pub async fn recv(&mut self) -> Option<IoEvent> {
+        std::future::poll_fn(|cx| {
+            if !self.status_closed {
+                match Pin::new(&mut self.status.recv()).poll(cx) {
+                    Poll::Ready(Ok(event)) => return Poll::Ready(Some(event)),
+                    Poll::Ready(Err(_)) => self.status_closed = true,
+                    Poll::Pending => {}
+                }
+            }
+            if !self.data_closed {
+                match Pin::new(&mut self.data.recv()).poll(cx) {
+                    Poll::Ready(Ok(event)) => return Poll::Ready(Some(event)),
+                    Poll::Ready(Err(_)) => self.data_closed = true,
+                    Poll::Pending => {}
+                }
+            }
+            if self.status_closed && self.data_closed {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    /// The next event without waiting. `None` means nothing is queued now.
+    pub fn try_recv(&mut self) -> Option<IoEvent> {
+        if let Ok(event) = self.status.try_recv() {
+            return Some(event);
+        }
+        self.data.try_recv().ok()
+    }
+
+    /// Both channels are closed and empty.
+    pub fn is_closed(&mut self) -> bool {
+        if !self.status_closed {
+            if let Err(error) = self.status.try_recv().map(|_| ()) {
+                self.status_closed = error.is_closed();
+            }
+        }
+        if !self.data_closed {
+            if let Err(error) = self.data.try_recv().map(|_| ()) {
+                self.data_closed = error.is_closed();
+            }
+        }
+        self.status_closed && self.data_closed
     }
 }
 
@@ -114,9 +176,60 @@ pub enum IoEvent {
     Data(Vec<u8>),
     PortLost(PortError),
     CommandFailed(PortError),
+    /// The port refused a parameter change. The session reverts its
+    /// parameters to the values that were in effect before.
+    ApplyFailed(PortError),
     Pins(PinState),
-    Dropped { bytes: u64 },
+    Dropped {
+        bytes: u64,
+    },
 }
+
+/// A port open that has been started on the UI thread. `open` blocks and
+/// may run on any thread.
+pub struct PendingOpen {
+    params: SerialParams,
+    generation: u64,
+    previous: Vec<JoinHandle<()>>,
+    opener: Opener,
+}
+
+type Opener = Box<dyn FnOnce(&SerialParams) -> Result<Box<dyn PortIo>, PortError> + Send>;
+
+/// The result of `PendingOpen::open`, to be handed to `finish_connect`.
+pub struct OpenedPort {
+    params: SerialParams,
+    generation: u64,
+    result: Result<Box<dyn PortIo>, PortError>,
+}
+
+impl PendingOpen {
+    pub fn params(&self) -> &SerialParams {
+        &self.params
+    }
+
+    /// Blocking. Waits up to two seconds for a previous thread of the same
+    /// pane to release the port, then opens.
+    pub fn open(self) -> OpenedPort {
+        let deadline = Instant::now() + SHUTDOWN_WAIT;
+        for handle in self.previous {
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+        let result = (self.opener)(&self.params);
+        OpenedPort {
+            params: self.params,
+            generation: self.generation,
+            result,
+        }
+    }
+}
+
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 pub struct Session {
     screen: Screen,
@@ -126,6 +239,9 @@ pub struct Session {
     link: Link,
     params: SerialParams,
     worker: Option<WorkerHandle>,
+    reaping: Vec<(JoinHandle<()>, Instant)>,
+    reap_warned: bool,
+    applied: Option<SerialParams>,
     generation: Arc<AtomicU64>,
     log: LogEngine,
     note: String,
@@ -151,6 +267,9 @@ impl Session {
             link: Link::Disconnected,
             params: SerialParams::default(),
             worker: None,
+            reaping: Vec::new(),
+            reap_warned: false,
+            applied: None,
             generation: Arc::new(AtomicU64::new(1)),
             log: LogEngine::default(),
             note: String::new(),
@@ -160,45 +279,104 @@ impl Session {
         }
     }
 
+    /// Open on the calling thread. The UI uses `begin_connect` instead.
     pub fn connect(&mut self, serial: SerialParams) -> Result<EventRx, OpenError> {
-        self.connect_with(serial, serial::open_port)
+        let pending = self.begin_connect(serial)?;
+        let opened = pending.open();
+        self.finish_connect(opened)
     }
 
-    pub(crate) fn connect_with(
+    /// Move to `Opening` and return the blocking part.
+    pub fn begin_connect(&mut self, serial: SerialParams) -> Result<PendingOpen, OpenError> {
+        self.begin_connect_with(serial, Box::new(serial::open_port))
+    }
+
+    pub(crate) fn begin_connect_with(
         &mut self,
         serial: SerialParams,
-        open: impl FnOnce(&SerialParams) -> Result<Box<dyn PortIo>, PortError>,
-    ) -> Result<EventRx, OpenError> {
+        opener: Opener,
+    ) -> Result<PendingOpen, OpenError> {
         if matches!(self.link, Link::Opening { .. } | Link::Open { .. }) {
             return Err(OpenError::AlreadyOpen);
         }
-        self.shutdown_worker();
+        self.stop_worker();
+        self.reset_stream();
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.link = Link::Opening {
             params: serial.clone(),
         };
-        match open(&serial) {
+        self.params = serial.clone();
+        let previous = self.reaping.drain(..).map(|(handle, _)| handle).collect();
+        self.reap_warned = false;
+        Ok(PendingOpen {
+            params: serial,
+            generation,
+            previous,
+            opener,
+        })
+    }
+
+    /// Finish an open on the UI thread. An open that was overtaken by a
+    /// disconnect or a newer connect is closed and reported as cancelled.
+    pub fn finish_connect(&mut self, opened: OpenedPort) -> Result<EventRx, OpenError> {
+        let current = self.generation.load(Ordering::Relaxed);
+        if opened.generation != current || !matches!(self.link, Link::Opening { .. }) {
+            return Err(OpenError::Cancelled);
+        }
+        match opened.result {
             Ok(port) => {
-                let (worker, rx) = serial::spawn(port, generation);
+                let (worker, channels) = serial::spawn(port, current);
                 self.worker = Some(worker);
-                self.params = serial.clone();
-                self.link = Link::Open { params: serial };
+                self.params = opened.params.clone();
+                self.applied = Some(opened.params.clone());
+                self.link = Link::Open {
+                    params: opened.params,
+                };
                 self.pins = None;
-                Ok(EventRx { rx })
+                self.note.clear();
+                Ok(EventRx::new(channels))
             }
             Err(error) => {
                 self.link = Link::Disconnected;
-                self.note = error.to_string();
-                Err(OpenError::Port(error))
+                let error = OpenError::Port(error);
+                self.note = format!("{} を開けない: {error}", opened.params.path);
+                Err(error)
             }
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn connect_with(
+        &mut self,
+        serial: SerialParams,
+        open: impl FnOnce(&SerialParams) -> Result<Box<dyn PortIo>, PortError> + Send + 'static,
+    ) -> Result<EventRx, OpenError> {
+        let pending = self.begin_connect_with(serial, Box::new(open))?;
+        let opened = pending.open();
+        self.finish_connect(opened)
+    }
+
+    /// Close the port. The receive stream is finished: an incomplete
+    /// Shift_JIS lead becomes U+FFFD, a held CR is completed, and the parser
+    /// forgets any half sequence, so nothing leaks into the next connection.
     pub fn disconnect(&mut self) {
-        let _ = self.screen.finish_codec();
-        self.shutdown_worker();
+        if matches!(self.link, Link::Opening { .. }) {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+        }
+        self.stop_worker();
+        self.reset_stream();
         self.link = Link::Disconnected;
         self.pins = None;
+    }
+
+    /// Reset to the state of a new pane: disconnected, no port name, log
+    /// stopped. The screen stays (§5.3: the user clears it).
+    pub fn reset_to_unconnected(&mut self) {
+        self.disconnect();
+        let _ = self.log.command(LogCommand::Stop);
+        self.params.path.clear();
+        self.usb = None;
+        self.note.clear();
     }
 
     pub fn close(&mut self) {
@@ -227,6 +405,35 @@ impl Session {
 
     pub fn note(&self) -> &str {
         &self.note
+    }
+
+    pub fn clear_note(&mut self) {
+        self.note.clear();
+    }
+
+    pub fn set_note(&mut self, note: impl Into<String>) {
+        self.note = note.into();
+    }
+
+    /// Periodic work, about once a second: flush a quiet log and reap port
+    /// threads that were asked to stop.
+    pub fn tick(&mut self) {
+        self.log.tick();
+        let now = Instant::now();
+        let mut still = Vec::new();
+        for (handle, since) in self.reaping.drain(..) {
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                if now.duration_since(since) >= SHUTDOWN_WAIT && !self.reap_warned {
+                    self.reap_warned = true;
+                    self.note = "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）"
+                        .into();
+                }
+                still.push((handle, since));
+            }
+        }
+        self.reaping = still;
     }
 
     pub fn pins(&self) -> Option<PinState> {
@@ -325,18 +532,49 @@ impl Session {
         self.note = error.to_string();
     }
 
+    /// The port refused new parameters. Show the reason and go back to the
+    /// parameters the port still has (review N25).
+    pub fn note_apply_failed(&mut self, error: PortError) {
+        if let Some(applied) = self.applied.clone() {
+            let path = self.params.path.clone();
+            self.params = SerialParams { path, ..applied };
+            if let Link::Open { .. } = self.link {
+                self.link = Link::Open {
+                    params: self.params.clone(),
+                };
+            }
+        }
+        self.note = format!("設定を戻した: {error}");
+    }
+
+    /// Route one event from `EventRx`.
+    pub fn apply_event(&mut self, event: IoEvent) {
+        match event {
+            IoEvent::Data(bytes) => self.apply_rx(&bytes),
+            IoEvent::PortLost(error) => {
+                self.note_port_lost(error);
+                self.release_port();
+            }
+            IoEvent::CommandFailed(error) => self.note_command_failed(error),
+            IoEvent::ApplyFailed(error) => self.note_apply_failed(error),
+            IoEvent::Pins(pins) => self.note_pins(pins),
+            IoEvent::Dropped { bytes } => self.note_dropped(bytes),
+        }
+    }
+
     pub fn note_pins(&mut self, pins: PinState) {
         self.pins = Some(pins);
     }
 
     pub fn note_dropped(&mut self, bytes: u64) {
-        self.note = format!("受信を {bytes} バイト落とした");
+        self.note = format!("受信が速すぎて計 {bytes} バイトを捨てた");
     }
 
     /// Stop the port thread and keep `Link::Lost`. `disconnect` is the
     /// transition back to `Disconnected`.
     pub fn release_port(&mut self) {
-        self.shutdown_worker();
+        self.stop_worker();
+        self.reset_stream();
     }
 
     pub fn resize(&mut self, columns: usize, rows: usize) {
@@ -357,7 +595,8 @@ impl Session {
     }
 
     pub fn set_newline(&mut self, newline: Newline) {
-        self.screen.set_newline(newline);
+        let outcome = self.screen.set_newline(newline);
+        self.log.record_text(&outcome.text);
         self.newline = newline;
     }
 
@@ -375,6 +614,7 @@ impl Session {
         }
         if matches!(self.link, Link::Open { .. }) {
             self.send_command(Command::Apply(params.clone()))?;
+            self.applied = Some(self.params.clone());
             self.params = params.clone();
             self.link = Link::Open { params };
             Ok(())
@@ -395,9 +635,9 @@ impl Session {
     }
 
     pub fn set_rts(&mut self, on: bool) -> Result<(), SessionError> {
-        if self.params.flow == serial::Flow::RtsCts {
+        if self.params.flow != serial::Flow::None {
             return Err(SessionError::Port(PortError::Unsupported(
-                "CTS による送信制御。受信の自動 RTS はしない",
+                "RTS を手で動かせるのはフロー制御がなしのときだけ",
             )));
         }
         self.params.rts = on;
@@ -499,15 +739,21 @@ impl Session {
         self.queue_chunks(chunks)
     }
 
+    /// One `Input` is one command, so it is queued whole or not at all
+    /// (review N4).
     fn queue_chunks(&mut self, chunks: Vec<Vec<u8>>) -> Result<(), SessionError> {
         if !matches!(self.link, Link::Open { .. }) {
             return Err(SessionError::NotOpen);
         }
-        let generation = self.generation.load(Ordering::Relaxed);
-        for bytes in chunks {
-            self.send_command(Command::Write { generation, bytes })?;
+        let bytes: Vec<u8> = chunks.concat();
+        if bytes.len() > serial::MAX_PENDING {
+            return Err(SessionError::TooLarge {
+                bytes: bytes.len(),
+                limit: serial::MAX_PENDING,
+            });
         }
-        Ok(())
+        let generation = self.generation.load(Ordering::Relaxed);
+        self.send_command(Command::Write { generation, bytes })
     }
 
     fn send_command(&mut self, command: Command) -> Result<(), SessionError> {
@@ -520,35 +766,29 @@ impl Session {
             .map_err(|_| SessionError::Busy)
     }
 
-    fn shutdown_worker(&mut self) {
+    /// Drop the command sender. The thread sees the channel disconnect and
+    /// returns; nothing here waits (reviews R41, N8). `tick` joins it.
+    fn stop_worker(&mut self) {
         let Some(worker) = self.worker.take() else {
             return;
         };
         let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = worker.commands.try_send(Command::Cancel { generation });
         let _ = worker.commands.try_send(Command::Shutdown);
-        let started = Instant::now();
-        loop {
-            if worker.join.is_finished() {
-                let _ = worker.join.join();
-                return;
-            }
-            if started.elapsed() >= Duration::from_secs(2) {
-                self.note = "スレッドが残っている".into();
-                return;
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
+        drop(worker.commands);
+        self.reaping.push((worker.join, Instant::now()));
+    }
+
+    fn reset_stream(&mut self) {
+        let outcome = self.screen.finish_stream();
+        self.log.record_text(&outcome.text);
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-            let _ = worker.commands.try_send(Command::Cancel { generation });
-            let _ = worker.commands.try_send(Command::Shutdown);
-        }
+        self.stop_worker();
+        let _ = self.log.command(LogCommand::Stop);
     }
 }
 
@@ -589,19 +829,25 @@ fn key_bytes(key: &KeyInput, app_cursor: bool) -> Result<Vec<u8>, SessionError> 
         KeyInput::Function(11) => b"\x1b[23~",
         KeyInput::Function(12) => b"\x1b[24~",
         KeyInput::Function(_) => b"",
-        KeyInput::Ctrl(ch) => return Ok(vec![ctrl_byte(*ch)]),
+        KeyInput::Ctrl(ch) => {
+            return ctrl_byte(*ch).map(|byte| vec![byte]).ok_or(SessionError::NoControlCode { ch: *ch })
+        }
     };
     Ok(bytes.to_vec())
 }
 
-fn ctrl_byte(ch: char) -> u8 {
+/// Ctrl plus a key, as a C0 byte. `None` for keys without a control code.
+pub(crate) fn ctrl_byte(ch: char) -> Option<u8> {
     match ch.to_ascii_lowercase() {
-        'c' => 0x03,
-        'd' => 0x04,
-        'z' => 0x1A,
-        other if other.is_ascii_lowercase() => (other as u8) - b'a' + 1,
-        other if other.is_ascii() => other as u8,
-        _ => 0,
+        other if other.is_ascii_lowercase() => Some((other as u8) - b'a' + 1),
+        '@' | ' ' | '2' => Some(0x00),
+        '[' | '3' => Some(0x1B),
+        '\\' | '4' => Some(0x1C),
+        ']' | '5' => Some(0x1D),
+        '^' | '6' => Some(0x1E),
+        '_' | '-' | '7' => Some(0x1F),
+        '?' | '8' => Some(0x7F),
+        _ => None,
     }
 }
 
@@ -627,9 +873,16 @@ mod tests {
     use std::collections::VecDeque;
     use std::io;
     use std::sync::{Mutex, MutexGuard};
+    use std::thread;
 
     struct SharedPort {
         inner: Arc<Mutex<PortState>>,
+    }
+
+    impl Drop for SharedPort {
+        fn drop(&mut self) {
+            lock(&self.inner).closed = true;
+        }
     }
 
     struct PortState {
@@ -646,10 +899,17 @@ mod tests {
         opened_with: Option<SerialParams>,
         pins: PinState,
         fail_rts: bool,
+        fail_apply: bool,
+        closed: bool,
+        read_delay: Duration,
     }
 
     impl PortIo for SharedPort {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let delay = lock(&self.inner).read_delay;
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
             let mut state = lock(&self.inner);
             match state.reads.pop_front() {
                 Some(Ok(bytes)) => {
@@ -676,7 +936,13 @@ mod tests {
         }
 
         fn apply(&mut self, params: &SerialParams) -> Result<(), PortError> {
-            lock(&self.inner).applied.push(params.clone());
+            let mut state = lock(&self.inner);
+            if state.fail_apply {
+                return Err(PortError::Io {
+                    message: "ボーレートをポートが受け付けない".into(),
+                });
+            }
+            state.applied.push(params.clone());
             Ok(())
         }
 
@@ -714,7 +980,7 @@ mod tests {
         inner.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    type SharedOpen = Box<dyn FnOnce(&SerialParams) -> Result<Box<dyn PortIo>, PortError>>;
+    type SharedOpen = Box<dyn FnOnce(&SerialParams) -> Result<Box<dyn PortIo>, PortError> + Send>;
 
     fn open_shared(state: PortState) -> (Arc<Mutex<PortState>>, SharedOpen) {
         let inner = Arc::new(Mutex::new(state));
@@ -791,12 +1057,19 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert!(matches!(session.link(), Link::Lost { .. }));
-        let error = match session.connect(SerialParams::default()) {
+        // Lost is not Open, so a new connect is attempted. The opener fails
+        // here without touching a real device.
+        let error = match session.connect_with(SerialParams::default(), |_: &SerialParams| {
+            Err(PortError::Io {
+                message: "ポートが見つからない".into(),
+            })
+        }) {
             Err(error) => error,
-            Ok(_) => panic!("opening an empty path should fail"),
+            Ok(_) => panic!("the failing opener must fail"),
         };
-        // Lost is not Open, so a new connect is attempted.
-        assert!(!matches!(error, OpenError::AlreadyOpen));
+        assert!(matches!(error, OpenError::Port(_)));
+        assert!(matches!(session.link(), Link::Disconnected));
+        assert!(session.note().contains("を開けない"), "{}", session.note());
     }
 
     #[test]
@@ -907,38 +1180,264 @@ mod tests {
         let (state, open) = open_shared(empty_state());
         let mut session = session();
         let _rx = session.connect_with(SerialParams::default(), open).unwrap();
-        session
-            .apply_input(Input::Key(KeyInput::Ctrl('c')))
-            .unwrap();
-        session
-            .apply_input(Input::Key(KeyInput::Ctrl('D')))
-            .unwrap();
-        session
-            .apply_input(Input::Key(KeyInput::Ctrl('z')))
-            .unwrap();
-        session
-            .apply_input(Input::Key(KeyInput::Backspace))
-            .unwrap();
-        session.apply_input(Input::Key(KeyInput::Delete)).unwrap();
-        session.apply_input(Input::Key(KeyInput::Home)).unwrap();
-        session.apply_input(Input::Key(KeyInput::End)).unwrap();
-        session
-            .apply_input(Input::Key(KeyInput::Function(1)))
-            .unwrap();
+        let keys = [
+            KeyInput::Ctrl('c'),
+            KeyInput::Ctrl('D'),
+            KeyInput::Ctrl('z'),
+            KeyInput::Ctrl('['),
+            KeyInput::Ctrl('@'),
+            KeyInput::Backspace,
+            KeyInput::Delete,
+            KeyInput::Home,
+            KeyInput::End,
+            KeyInput::Function(1),
+            KeyInput::Arrow(Direction::Up),
+            KeyInput::Arrow(Direction::Left),
+        ];
+        for key in keys {
+            session.apply_input(Input::Key(key)).unwrap();
+        }
+        let expected: Vec<u8> = [
+            &[0x03u8][..],
+            &[0x04],
+            &[0x1A],
+            &[0x1B],
+            &[0x00],
+            &[0x08],
+            b"\x1b[3~",
+            b"\x1b[H",
+            b"\x1b[F",
+            b"\x1bOP",
+            b"\x1b[A",
+            b"\x1b[D",
+        ]
+        .concat();
+        let written = wait_written(&state, expected.len());
+        assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn app_cursor_mode_sends_ss3_arrows() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        session.apply_rx(b"\x1b[?1h");
         session
             .apply_input(Input::Key(KeyInput::Arrow(Direction::Up)))
             .unwrap();
-        let written = wait_written(&state, 20);
-        assert!(written.windows(1).any(|w| w == [0x03]));
-        assert!(written.windows(1).any(|w| w == [0x04]));
-        assert!(written.windows(1).any(|w| w == [0x1A]));
-        assert!(written.windows(1).any(|w| w == [0x08]));
-        assert!(written.windows(4).any(|w| w == *b"\x1b[3~"));
-        assert!(written
-            .windows(3)
-            .any(|w| w == *b"\x1b[H" || w == *b"\x1b[F"));
-        assert!(written.windows(3).any(|w| w == *b"\x1bOP"));
-        assert!(written.windows(3).any(|w| w == *b"\x1b[A"));
+        session
+            .apply_input(Input::Key(KeyInput::Arrow(Direction::Right)))
+            .unwrap();
+        assert_eq!(wait_written(&state, 6), b"\x1bOA\x1bOC");
+    }
+
+    #[test]
+    fn ctrl_without_a_control_code_is_an_error() {
+        let (_state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let error = session
+            .apply_input(Input::Key(KeyInput::Ctrl('é')))
+            .unwrap_err();
+        assert_eq!(error, SessionError::NoControlCode { ch: 'é' });
+    }
+
+    #[test]
+    fn status_events_survive_a_full_data_channel() {
+        // 200 chunks arrive while nobody drains the channel (depth 32), then
+        // the port fails. The loss and the dropped count must still arrive
+        // (review N2).
+        let mut reads: VecDeque<io::Result<Vec<u8>>> =
+            (0..200).map(|_| Ok(vec![b'x'; 100])).collect();
+        reads.push_back(Err(io::Error::new(io::ErrorKind::BrokenPipe, "gone")));
+        let (state, open) = open_shared(PortState {
+            reads,
+            ..empty_state()
+        });
+        let mut session = session();
+        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
+        wait_until(|| lock(&state).closed);
+        let mut lost = false;
+        let mut dropped = 0;
+        let mut data = 0;
+        while let Some(event) = rx.try_recv() {
+            match event {
+                IoEvent::PortLost(_) => lost = true,
+                IoEvent::Dropped { bytes } => dropped = dropped.max(bytes),
+                IoEvent::Data(bytes) => data += bytes.len() as u64,
+                _ => {}
+            }
+        }
+        assert!(lost, "PortLost was swallowed");
+        assert!(dropped > 0, "dropped count was not reported");
+        assert_eq!(data + dropped, 200 * 100);
+    }
+
+    #[test]
+    fn read_error_releases_the_port_without_shutdown() {
+        let (state, open) = open_shared(PortState {
+            reads: VecDeque::from([Err(io::Error::new(io::ErrorKind::BrokenPipe, "gone"))]),
+            ..empty_state()
+        });
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        // No disconnect: the thread closes the handle by itself (review N3).
+        wait_until(|| lock(&state).closed);
+    }
+
+    #[test]
+    fn eof_is_port_lost() {
+        let (_state, open) = open_shared(PortState {
+            reads: VecDeque::from([Ok(Vec::new())]),
+            ..empty_state()
+        });
+        let mut session = session();
+        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
+        match wait_event(&mut rx) {
+            Some(IoEvent::PortLost(error)) => session.apply_event(IoEvent::PortLost(error)),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(matches!(session.link(), Link::Lost { .. }));
+    }
+
+    #[test]
+    fn a_large_paste_is_sent_whole() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        // 300 KiB used to overflow the 32-deep command channel (review N4).
+        let text = "a".repeat(300 * 1024);
+        session.apply_input(Input::Text(text)).unwrap();
+        let written = wait_written(&state, 300 * 1024);
+        assert_eq!(written.len(), 300 * 1024);
+    }
+
+    #[test]
+    fn a_paste_over_the_limit_sends_nothing() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let text = "a".repeat(serial::MAX_PENDING + 1);
+        let error = session.apply_input(Input::Text(text)).unwrap_err();
+        assert!(matches!(error, SessionError::TooLarge { .. }));
+        thread::sleep(Duration::from_millis(30));
+        assert!(lock(&state).written.is_empty());
+    }
+
+    #[test]
+    fn disconnect_does_not_wait_for_a_slow_read() {
+        let (state, open) = open_shared(PortState {
+            read_delay: Duration::from_millis(300),
+            ..empty_state()
+        });
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let started = Instant::now();
+        session.disconnect();
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(matches!(session.link(), Link::Disconnected));
+        wait_until(|| {
+            session.tick();
+            lock(&state).closed
+        });
+    }
+
+    #[test]
+    fn open_is_split_and_a_disconnect_cancels_it() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let pending = session
+            .begin_connect_with(
+                SerialParams {
+                    path: "COM9".into(),
+                    ..SerialParams::default()
+                },
+                Box::new(open),
+            )
+            .unwrap();
+        assert!(matches!(session.link(), Link::Opening { .. }));
+        let opened = thread::spawn(move || pending.open()).join().unwrap();
+        session.disconnect();
+        assert_eq!(
+            session.finish_connect(opened).err(),
+            Some(OpenError::Cancelled)
+        );
+        assert!(matches!(session.link(), Link::Disconnected));
+        // The port opened in the background is closed again.
+        wait_until(|| lock(&state).closed);
+    }
+
+    #[test]
+    fn refused_parameters_are_reverted() {
+        let (_state, open) = open_shared(PortState {
+            fail_apply: true,
+            ..empty_state()
+        });
+        let mut session = session();
+        let mut rx = session
+            .connect_with(
+                SerialParams {
+                    baud_rate: 115_200,
+                    ..SerialParams::default()
+                },
+                open,
+            )
+            .unwrap();
+        let next = SerialParams {
+            baud_rate: 12_345,
+            ..session.params().clone()
+        };
+        session.set_serial_params(next).unwrap();
+        assert_eq!(session.params().baud_rate, 12_345);
+        match wait_event(&mut rx) {
+            Some(event @ IoEvent::ApplyFailed(_)) => session.apply_event(event),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(session.params().baud_rate, 115_200);
+        assert!(session.note().contains("設定を戻した"), "{}", session.note());
+    }
+
+    #[test]
+    fn manual_rts_only_without_flow_control() {
+        for flow in [Flow::XonXoff, Flow::RtsCts] {
+            let (state, open) = open_shared(empty_state());
+            let mut session = session();
+            let _rx = session
+                .connect_with(
+                    SerialParams {
+                        flow,
+                        ..SerialParams::default()
+                    },
+                    open,
+                )
+                .unwrap();
+            assert!(session.set_rts(true).is_err(), "{flow:?}");
+            thread::sleep(Duration::from_millis(20));
+            assert!(lock(&state).rts.is_empty());
+        }
+    }
+
+    #[test]
+    fn disconnect_finishes_the_receive_stream() {
+        let mut session = Session::new(SessionConfig {
+            encoding: SessionEncoding::ShiftJis,
+            newline: Newline {
+                receive: ReceiveNewline::Cr,
+                transmit: TransmitNewline::Cr,
+            },
+            ..SessionConfig::default()
+        });
+        // A half escape sequence and a lone Shift_JIS lead byte.
+        session.apply_rx(b"A\x1b[");
+        session.disconnect();
+        session.apply_rx(b"31mB\x82");
+        session.disconnect();
+        session.apply_rx(b"C");
+        let row = visible(&session);
+        // The parser forgot `ESC [`, so `31m` is printed; the lead became
+        // U+FFFD instead of joining `C` (reviews N11, N15).
+        assert_eq!(row, "A31mB\u{FFFD}C");
     }
 
     #[test]
@@ -994,6 +1493,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn text_log_maps_line_drawing_like_the_screen() {
+        // One parser feeds both, so `ESC ( 0` changes the log too (R19).
+        let dir = std::env::temp_dir().join(format!("rs-term-dec-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dec.log");
+        let mut session = session();
+        session
+            .log(LogCommand::Start(LogTarget::Text {
+                path: path.clone(),
+                append: false,
+                rotate: Rotate {
+                    max_bytes: 64 * 1024,
+                    keep: 2,
+                },
+                encoding: LogEncoding::Utf8,
+                plain: false,
+                bom: false,
+                timestamp: None,
+            }))
+            .unwrap();
+        session.apply_rx(b"\x1b(0lqk\x1b(Bq");
+        assert_eq!(visible(&session), "┌─┐q");
+        session.log(LogCommand::Stop).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "┌─┐q");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn empty_state() -> PortState {
         PortState {
             reads: VecDeque::new(),
@@ -1014,6 +1542,9 @@ mod tests {
                 ri: false,
             },
             fail_rts: false,
+            fail_apply: false,
+            closed: false,
+            read_delay: Duration::ZERO,
         }
     }
 
@@ -1032,11 +1563,11 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             match rx.try_recv() {
-                Ok(event @ IoEvent::Data(_)) => return Some(event),
-                Ok(IoEvent::Pins(_)) | Ok(IoEvent::Dropped { .. }) => {}
-                Ok(other) => return Some(other),
-                Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(5)),
-                Err(TryRecvError::Closed) => return None,
+                Some(event @ IoEvent::Data(_)) => return Some(event),
+                Some(IoEvent::Pins(_)) | Some(IoEvent::Dropped { .. }) => {}
+                Some(other) => return Some(other),
+                None if rx.is_closed() => return None,
+                None => thread::sleep(Duration::from_millis(5)),
             }
         }
         None
@@ -1046,13 +1577,24 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             match rx.try_recv() {
-                Ok(IoEvent::Pins(_)) => {}
-                Ok(event) => return Some(event),
-                Err(TryRecvError::Empty) => thread::sleep(Duration::from_millis(5)),
-                Err(TryRecvError::Closed) => return None,
+                Some(IoEvent::Pins(_)) => {}
+                Some(event) => return Some(event),
+                None if rx.is_closed() => return None,
+                None => thread::sleep(Duration::from_millis(5)),
             }
         }
         None
+    }
+
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if done() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("condition not reached in 3 s");
     }
 
     fn wait_written(state: &Arc<Mutex<PortState>>, min: usize) -> Vec<u8> {

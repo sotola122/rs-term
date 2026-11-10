@@ -19,6 +19,10 @@ pub const READ_TIMEOUT: Duration = Duration::from_millis(20);
 const DATA_DEPTH: usize = 32;
 const COMMAND_DEPTH: usize = 32;
 const MAX_CHUNK: usize = 4096;
+/// Upper bound of bytes waiting for the port. One `Input` larger than this
+/// is refused as a whole.
+pub(crate) const MAX_PENDING: usize = 16 * 1024 * 1024;
+const DROP_REPORT_EVERY: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataBits {
@@ -181,7 +185,7 @@ pub(crate) trait PortIo: Send {
 pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortError> {
     if !(1..=4_000_000).contains(&params.baud_rate) {
         return Err(PortError::Io {
-            message: "baud_rate が範囲外".into(),
+            message: "ボーレートが範囲外（1〜4000000）".into(),
         });
     }
     let mut builder = serialport::new(&params.path, params.baud_rate)
@@ -221,19 +225,19 @@ impl PortIo for SerialIo {
     fn apply(&mut self, params: &SerialParams) -> Result<(), PortError> {
         self.port
             .set_baud_rate(params.baud_rate)
-            .map_err(|error| named("baud_rate", error))?;
+            .map_err(|error| named("ボーレート", error))?;
         self.port
             .set_data_bits(map_data_bits(params.data_bits))
-            .map_err(|error| named("data_bits", error))?;
+            .map_err(|error| named("データビット", error))?;
         self.port
             .set_parity(map_parity(params.parity))
-            .map_err(|error| named("parity", error))?;
+            .map_err(|error| named("パリティ", error))?;
         self.port
             .set_stop_bits(map_stop(params.stop_bits))
-            .map_err(|error| named("stop_bits", error))?;
+            .map_err(|error| named("ストップビット", error))?;
         self.port
             .set_flow_control(map_flow(params.flow))
-            .map_err(|error| named("flow", error))?;
+            .map_err(|error| named("フロー制御", error))?;
         self.flow = params.flow;
         Ok(())
     }
@@ -245,9 +249,9 @@ impl PortIo for SerialIo {
     }
 
     fn set_rts(&mut self, on: bool) -> Result<(), PortError> {
-        if self.flow == Flow::RtsCts {
+        if self.flow != Flow::None {
             return Err(PortError::Unsupported(
-                "RTS/CTS のあいだ RTS は手で動かさない",
+                "RTS を手で動かせるのはフロー制御がなしのときだけ",
             ));
         }
         self.port
@@ -275,13 +279,34 @@ impl PortIo for SerialIo {
 
 fn named(field: &str, error: serialport::Error) -> PortError {
     PortError::Io {
-        message: format!("{field}: {error}"),
+        message: format!("{field}をポートが受け付けない（OS: {}）", error.description),
+    }
+}
+
+/// `serialport` errors in Japanese. The OS text stays in parentheses so the
+/// cause can still be searched.
+pub(crate) fn serial_error_text(kind: &serialport::ErrorKind, description: &str) -> String {
+    let what = match kind {
+        serialport::ErrorKind::NoDevice => "ポートが見つからない（抜かれたか、名前が違う）",
+        serialport::ErrorKind::InvalidInput => "設定値をポートが受け付けない",
+        serialport::ErrorKind::Io(io::ErrorKind::NotFound) => "ポートが見つからない",
+        serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => {
+            "アクセスが拒否された（他のアプリが使用中の可能性）"
+        }
+        serialport::ErrorKind::Io(io::ErrorKind::TimedOut) => "応答がない（タイムアウト）",
+        serialport::ErrorKind::Io(_) => "入出力エラー",
+        serialport::ErrorKind::Unknown => "原因不明のエラー",
+    };
+    if description.is_empty() {
+        what.to_string()
+    } else {
+        format!("{what}（OS: {description}）")
     }
 }
 
 fn map_serial_error(error: serialport::Error) -> PortError {
     PortError::Io {
-        message: format!("{:?}: {}", error.kind, error.description),
+        message: serial_error_text(&error.kind, &error.description),
     }
 }
 
@@ -318,12 +343,21 @@ fn map_flow(value: Flow) -> serialport::FlowControl {
 }
 
 pub(crate) enum Command {
-    Write { generation: u64, bytes: Vec<u8> },
+    /// One whole `Input`. The thread writes it in pieces; a paste is never
+    /// split across commands, so it is sent completely or not at all.
+    Write {
+        generation: u64,
+        bytes: Vec<u8>,
+    },
     Apply(SerialParams),
     Dtr(bool),
     Rts(bool),
-    Break { hold: Duration },
-    Cancel { generation: u64 },
+    Break {
+        hold: Duration,
+    },
+    Cancel {
+        generation: u64,
+    },
     Shutdown,
 }
 
@@ -332,28 +366,95 @@ pub(crate) struct WorkerHandle {
     pub join: JoinHandle<()>,
 }
 
-pub(crate) fn spawn(
-    port: Box<dyn PortIo>,
-    generation: u64,
-) -> (WorkerHandle, async_mpsc::Receiver<IoEvent>) {
+/// Status events travel on their own unbounded channel. A full data channel
+/// can therefore never swallow `PortLost`, `CommandFailed`, or the dropped
+/// byte count (review N2).
+pub(crate) struct Channels {
+    pub data: async_mpsc::Receiver<IoEvent>,
+    pub status: async_mpsc::UnboundedReceiver<IoEvent>,
+}
+
+pub(crate) fn spawn(port: Box<dyn PortIo>, generation: u64) -> (WorkerHandle, Channels) {
     let (data_tx, data_rx) = async_mpsc::channel(DATA_DEPTH);
+    let (status_tx, status_rx) = async_mpsc::unbounded();
     let (cmd_tx, cmd_rx) = mpsc::sync_channel(COMMAND_DEPTH);
     let join = thread::Builder::new()
         .name("rs-term-serial".into())
-        .spawn(move || worker_loop(port, data_tx, cmd_rx, generation))
+        .spawn(move || {
+            let outlet = Outlet {
+                data: data_tx,
+                status: status_tx,
+                dropped: 0,
+                reported: 0,
+                last_report: None,
+            };
+            worker_loop(port, outlet, cmd_rx, generation)
+        })
         .expect("spawn serial thread");
     (
         WorkerHandle {
             commands: cmd_tx,
             join,
         },
-        data_rx,
+        Channels {
+            data: data_rx,
+            status: status_rx,
+        },
     )
+}
+
+struct Outlet {
+    data: async_mpsc::Sender<IoEvent>,
+    status: async_mpsc::UnboundedSender<IoEvent>,
+    dropped: u64,
+    reported: u64,
+    last_report: Option<Instant>,
+}
+
+impl Outlet {
+    fn data(&mut self, bytes: Vec<u8>) {
+        match self.data.try_send(IoEvent::Data(bytes)) {
+            Ok(()) => {}
+            Err(error) if error.is_full() => {
+                if let IoEvent::Data(bytes) = error.into_inner() {
+                    self.dropped += bytes.len() as u64;
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    fn status(&mut self, event: IoEvent) {
+        let _ = self.status.unbounded_send(event);
+    }
+
+    /// Report the running dropped-byte total at most every 200 ms.
+    fn report_dropped(&mut self, force: bool) {
+        if self.dropped == self.reported {
+            return;
+        }
+        let due = self
+            .last_report
+            .is_none_or(|at| at.elapsed() >= DROP_REPORT_EVERY);
+        if force || due {
+            self.reported = self.dropped;
+            self.last_report = Some(Instant::now());
+            self.status(IoEvent::Dropped {
+                bytes: self.dropped,
+            });
+        }
+    }
+}
+
+fn read_lost(error: &io::Error) -> PortError {
+    PortError::Io {
+        message: format!("ポートとの通信が切れた（OS: {error}）"),
+    }
 }
 
 fn worker_loop(
     mut port: Box<dyn PortIo>,
-    mut data_tx: async_mpsc::Sender<IoEvent>,
+    mut out: Outlet,
     commands: Receiver<Command>,
     mut generation: u64,
 ) {
@@ -361,38 +462,34 @@ fn worker_loop(
     let mut pending: Vec<u8> = Vec::new();
     let mut pending_at = 0usize;
     let mut break_until: Option<Instant> = None;
-    let mut lost = false;
     let mut last_pins: Option<PinState> = None;
-    let mut dropped = 0u64;
     loop {
         let mut read_was_idle = false;
-        if !lost {
-            match port.read(&mut buffer) {
-                Ok(0) => read_was_idle = true,
-                Ok(count) => {
-                    let chunk = buffer[..count.min(MAX_CHUNK)].to_vec();
-                    send_data(&mut data_tx, IoEvent::Data(chunk), &mut dropped);
-                }
-                Err(error)
-                    if error.kind() == io::ErrorKind::TimedOut
-                        || error.kind() == io::ErrorKind::Interrupted =>
-                {
-                    read_was_idle = true;
-                }
-                Err(error) => {
-                    send_data(
-                        &mut data_tx,
-                        IoEvent::PortLost(PortError::Io {
-                            message: error.to_string(),
-                        }),
-                        &mut dropped,
-                    );
-                    lost = true;
-                    read_was_idle = true;
-                }
+        match port.read(&mut buffer) {
+            // `serialport` on Windows turns a zero-length ReadFile into
+            // TimedOut, so Ok(0) never means idle there. On Unix it is EOF:
+            // the device hung up (review R17).
+            Ok(0) => {
+                out.report_dropped(true);
+                out.status(IoEvent::PortLost(PortError::Io {
+                    message: "ポートとの通信が切れた（EOF）".into(),
+                }));
+                break;
             }
-        } else {
-            read_was_idle = true;
+            Ok(count) => out.data(buffer[..count.min(MAX_CHUNK)].to_vec()),
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::Interrupted =>
+            {
+                read_was_idle = true;
+            }
+            Err(error) => {
+                out.report_dropped(true);
+                out.status(IoEvent::PortLost(read_lost(&error)));
+                // Release the handle now (review N3). Only Shutdown is
+                // awaited below.
+                break;
+            }
         }
 
         let mut saw_command = false;
@@ -411,48 +508,43 @@ fn worker_loop(
                             generation: write_generation,
                             bytes,
                         } => {
-                            if write_generation == generation && !bytes.is_empty() {
-                                if pending_at >= pending.len() {
-                                    pending.clear();
-                                    pending_at = 0;
-                                }
-                                pending.extend(bytes);
+                            if write_generation != generation || bytes.is_empty() {
+                                continue;
                             }
+                            if pending_at >= pending.len() {
+                                pending.clear();
+                                pending_at = 0;
+                            }
+                            if pending.len() - pending_at + bytes.len() > MAX_PENDING {
+                                out.status(IoEvent::CommandFailed(PortError::Io {
+                                    message: format!(
+                                        "送信待ちが上限 {} MiB を超えるので {} バイトを送らなかった",
+                                        MAX_PENDING / (1024 * 1024),
+                                        bytes.len()
+                                    ),
+                                }));
+                                continue;
+                            }
+                            pending.extend(bytes);
                         }
                         Command::Apply(params) => {
                             if let Err(error) = port.apply(&params) {
-                                send_data(
-                                    &mut data_tx,
-                                    IoEvent::CommandFailed(error),
-                                    &mut dropped,
-                                );
+                                out.status(IoEvent::ApplyFailed(error));
                             }
                         }
                         Command::Dtr(on) => {
                             if let Err(error) = port.set_dtr(on) {
-                                send_data(
-                                    &mut data_tx,
-                                    IoEvent::CommandFailed(error),
-                                    &mut dropped,
-                                );
+                                out.status(IoEvent::CommandFailed(error));
                             }
                         }
                         Command::Rts(on) => {
                             if let Err(error) = port.set_rts(on) {
-                                send_data(
-                                    &mut data_tx,
-                                    IoEvent::CommandFailed(error),
-                                    &mut dropped,
-                                );
+                                out.status(IoEvent::CommandFailed(error));
                             }
                         }
                         Command::Break { hold } => {
                             if let Err(error) = port.set_break(true) {
-                                send_data(
-                                    &mut data_tx,
-                                    IoEvent::CommandFailed(error),
-                                    &mut dropped,
-                                );
+                                out.status(IoEvent::CommandFailed(error));
                             } else {
                                 break_until = Some(Instant::now() + hold);
                             }
@@ -465,7 +557,9 @@ fn worker_loop(
         }
 
         if break_until.is_some_and(|until| Instant::now() >= until) {
-            let _ = port.set_break(false);
+            if let Err(error) = port.set_break(false) {
+                out.status(IoEvent::CommandFailed(error));
+            }
             break_until = None;
         }
 
@@ -479,31 +573,31 @@ fn worker_loop(
                         pending_at = 0;
                     }
                 }
+                // CTS or XOFF holds the line. Keep the rest and retry.
                 Err(error)
                     if error.kind() == io::ErrorKind::TimedOut
                         || error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => {
-                    send_data(
-                        &mut data_tx,
-                        IoEvent::CommandFailed(PortError::Io {
-                            message: error.to_string(),
-                        }),
-                        &mut dropped,
-                    );
+                    out.status(IoEvent::CommandFailed(PortError::Io {
+                        message: format!(
+                            "送信に失敗し、残り {} バイトを捨てた（OS: {error}）",
+                            pending.len() - pending_at
+                        ),
+                    }));
                     pending.clear();
                     pending_at = 0;
                 }
             }
         }
 
-        if !lost {
-            if let Ok(pins) = port.pins() {
-                if last_pins != Some(pins) {
-                    last_pins = Some(pins);
-                    send_data(&mut data_tx, IoEvent::Pins(pins), &mut dropped);
-                }
+        if let Ok(pins) = port.pins() {
+            if last_pins != Some(pins) {
+                last_pins = Some(pins);
+                out.status(IoEvent::Pins(pins));
             }
         }
+
+        out.report_dropped(false);
 
         if read_was_idle && !saw_command && pending_at >= pending.len() {
             // A real port already blocked inside `read` for `read_timeout`.
@@ -512,18 +606,15 @@ fn worker_loop(
             thread::park_timeout(Duration::from_millis(2));
         }
     }
-}
 
-fn send_data(tx: &mut async_mpsc::Sender<IoEvent>, event: IoEvent, dropped: &mut u64) {
-    match tx.try_send(event) {
-        Ok(()) => {}
-        Err(error) if error.is_full() => {
-            if let IoEvent::Data(bytes) = error.into_inner() {
-                *dropped += bytes.len() as u64;
-                let _ = tx.try_send(IoEvent::Dropped { bytes: *dropped });
-            }
+    // Lost: the port is closed here, before waiting, so the device can be
+    // opened again while the UI still holds the old session.
+    drop(port);
+    loop {
+        match commands.recv() {
+            Ok(Command::Shutdown) | Err(_) => return,
+            Ok(_) => {}
         }
-        Err(_) => {}
     }
 }
 
