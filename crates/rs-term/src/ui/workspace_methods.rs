@@ -1124,13 +1124,13 @@ fn load_keymap(cx: &mut App) -> String {
 fn config_file(name: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        return rs_term_core::windows_settings_path(std::env::var("APPDATA").ok().as_deref())
-            .map(|path| path.with_file_name(name));
+        rs_term_core::windows_settings_path(std::env::var("APPDATA").ok().as_deref())
+            .map(|path| path.with_file_name(name))
     }
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME")?;
-        return Some(PathBuf::from(home).join("Library/Application Support/rs-term").join(name));
+        Some(PathBuf::from(home).join("Library/Application Support/rs-term").join(name))
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
