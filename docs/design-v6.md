@@ -89,7 +89,7 @@ GPUI の複数打鍵バインド（`"ctrl-b v"`）は使わない。GPUI の保�
 | `close_pane` | `prefix+x`（1175） | `pane.close` | ペインを閉じる | `prefix+x` | `layout.rs:224-252`、`workspace/tab.rs:500-514` |
 | `zoom` | `prefix+z`（1176） | `pane.zoom` | ズーム切替 | `prefix+z` | `app/actions.rs:810-869`、`workspace/tab.rs:412,512` |
 | `resize_mode` | `prefix+r`（1177） | `pane.resize_mode` | サイズ変更モード | `prefix+r` | `client/shell/input.rs:1042-1069` |
-| `resize_pane_*` | 未設定（1178-1181） | `pane.resize_left` ほか | 左／下／上／右へ広げる | 無し（パレットのみ） | `app/api/panes.rs:719-771`（既定量 0.05、737） |
+| `resize_pane_*` | 未設定（1178-1181） | `pane.resize_left` ほか | 仕切りを左／下／上／右へ | 無し（パレットのみ） | `app/api/panes.rs:719-771`（既定量 0.05、737） |
 | `rename_pane` | `prefix+shift+p`（1158） | `pane.rename` | ペイン名を変更 | `prefix+P` | herdr の名前付け。名前は状態行の先頭に出す |
 | `clear_pane` | 未設定（1160） | `pane.clear` | 画面を消去 | 無し（パレットのみ） | `client/shell/actions.rs:1102-1104` |
 | `copy_mode` | `prefix+[`（1161） | `pane.copy_mode` | コピーモード | `prefix+[` | `keyboard.mdx:93-95` |
