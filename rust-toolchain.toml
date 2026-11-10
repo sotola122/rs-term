@@ -1,0 +1,7 @@
+[toolchain]
+# gpui-kit 0.9.0 cannot be compiled with 1.88. Its dependencies need
+# cosmic-text 0.19 / smol_str 0.3.6 (1.89), oo7 0.6.0 (1.92),
+# slice::as_array (1.93), and std::hint::cold_path (1.95).
+# 1.88 remains the floor for rs-term's own code.
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
