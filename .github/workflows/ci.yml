@@ -28,7 +28,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev \
-            libxcb1-dev libvulkan-dev libfontconfig1-dev
+            pkg-config \
+            libudev-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libfontconfig1-dev \
+            libvulkan-dev
       - name: test
         run: cargo test --locked --workspace
