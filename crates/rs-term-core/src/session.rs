@@ -427,8 +427,9 @@ impl Session {
             } else {
                 if now.duration_since(since) >= SHUTDOWN_WAIT && !self.reap_warned {
                     self.reap_warned = true;
-                    self.note = "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）"
-                        .into();
+                    self.note =
+                        "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）"
+                            .into();
                 }
                 still.push((handle, since));
             }
@@ -830,7 +831,9 @@ fn key_bytes(key: &KeyInput, app_cursor: bool) -> Result<Vec<u8>, SessionError> 
         KeyInput::Function(12) => b"\x1b[24~",
         KeyInput::Function(_) => b"",
         KeyInput::Ctrl(ch) => {
-            return ctrl_byte(*ch).map(|byte| vec![byte]).ok_or(SessionError::NoControlCode { ch: *ch })
+            return ctrl_byte(*ch)
+                .map(|byte| vec![byte])
+                .ok_or(SessionError::NoControlCode { ch: *ch })
         }
     };
     Ok(bytes.to_vec())
@@ -1395,7 +1398,11 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(session.params().baud_rate, 115_200);
-        assert!(session.note().contains("設定を戻した"), "{}", session.note());
+        assert!(
+            session.note().contains("設定を戻した"),
+            "{}",
+            session.note()
+        );
     }
 
     #[test]

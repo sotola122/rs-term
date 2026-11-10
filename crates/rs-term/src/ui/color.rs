@@ -92,9 +92,9 @@ fn named(name: AnsiName, colors: &[Option<Rgb>], palette: &TerminalPalette, role
         AnsiName::BrightMagenta => ansi(13),
         AnsiName::BrightCyan => ansi(14),
         AnsiName::BrightWhite => ansi(15),
-        AnsiName::Foreground | AnsiName::BrightForeground => {
-            override_or(colors, 256, palette.foreground)
-        }
+        AnsiName::Foreground => override_or(colors, 256, palette.foreground),
+        // alacritty `NamedColor::BrightForeground` is 267 (review N19).
+        AnsiName::BrightForeground => override_or(colors, 267, palette.foreground),
         AnsiName::Background => override_or(colors, 257, palette.background),
         AnsiName::Cursor => override_or(colors, 258, palette.cursor),
         AnsiName::DimForeground => override_or(
@@ -120,8 +120,19 @@ fn override_or(colors: &[Option<Rgb>], index: usize, fallback: Rgb) -> Rgb {
     colors.get(index).copied().flatten().unwrap_or(fallback)
 }
 
+/// The grid font: the configured name, then Consolas and Cascadia Mono
+/// (Windows, §5.9), then the secondary-OS monospace faces. `.SystemUIFont`
+/// is never used for the grid.
 pub fn resolve_font<'a>(available: &'a [String], requested: &str) -> Option<&'a str> {
-    for name in [requested, "Consolas", "Cascadia Mono"] {
+    for name in [
+        requested,
+        "Consolas",
+        "Cascadia Mono",
+        "DejaVu Sans Mono",
+        "Noto Sans Mono",
+        "Liberation Mono",
+        "Menlo",
+    ] {
         if name.is_empty() {
             continue;
         }
@@ -175,6 +186,22 @@ mod tests {
             &palette,
         );
         assert_eq!(fg, Rgb { r: 9, g: 9, b: 9 });
+    }
+
+    #[test]
+    fn bright_foreground_reads_index_267() {
+        let palette = classic_dark();
+        let mut colors = vec![None; 269];
+        colors[256] = Some(Rgb { r: 1, g: 1, b: 1 });
+        colors[267] = Some(Rgb { r: 7, g: 7, b: 7 });
+        let (fg, _) = resolve(
+            &CellColor::Named(AnsiName::BrightForeground),
+            &CellColor::Named(AnsiName::Background),
+            false,
+            &colors,
+            &palette,
+        );
+        assert_eq!(fg, Rgb { r: 7, g: 7, b: 7 });
     }
 
     #[test]

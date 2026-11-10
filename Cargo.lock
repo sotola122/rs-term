@@ -5389,6 +5389,8 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "rs-term-core",
+ "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]

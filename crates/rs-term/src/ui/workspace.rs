@@ -24,10 +24,10 @@ use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable, ResizableState};
 use rs_term_core::{
     expand_log_name, palette_by_name, port_token, save_settings_file, validate_log_name,
-    windows_log_dir, Axis as SettingsAxis, DataBits, EventRx, Flow, Input, IoEvent, KeyInput,
-    LayoutNode, Link, LogCommand, LogEncoding, LogSession, LogTarget, PaneSettings, Parity,
-    PortInfo, ReceiveNewline, Rotate, ScreenConfig, SerialParams, Session, SessionConfig,
-    SessionEncoding, Settings, StopBits, Timestamp, TransmitNewline, UsbIdentity,
+    windows_log_dir, DataBits, EventRx, Flow, Input, IoEvent, KeyInput, Link, LogCommand,
+    LogEncoding, LogSession, LogTarget, Parity, PortInfo, ReceiveNewline, Rotate, ScreenConfig,
+    SerialParams, Session, SessionConfig, SessionEncoding, Settings, StopBits, Timestamp,
+    TransmitNewline, UsbIdentity,
 };
 
 use super::actions;
@@ -66,7 +66,7 @@ pub struct Workspace {
     cell_px: f32,
     line_px: f32,
     grid_bounds: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
-    status: String,
+    resize: bool,
     draft: Draft,
 }
 
@@ -141,10 +141,7 @@ impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (settings, path, save_allowed, mut status) = load_settings();
         apply_theme(&settings, window, cx);
-        let (layout, mut panes) = sessions_from_settings(&settings);
-        if let Some(pane) = panes.get_mut(&layout.focus()) {
-            pane.session.apply_rx(b"hello\r\n");
-        }
+        let (layout, panes) = sessions_from_settings(&settings);
         window.set_window_title("rs-term");
         let names = cx.text_system().all_font_names();
         let terminal_font =
@@ -190,12 +187,22 @@ impl Workspace {
             cell_px: 8.0,
             line_px: 18.0,
             grid_bounds: Rc::new(RefCell::new(HashMap::new())),
-            status,
+            resize: false,
         };
+        workspace.set_status(status);
         if workspace.settings.serial.reopen_on_start {
             workspace.reopen_saved(cx);
         }
         workspace
+    }
+
+    /// Every message the app has for the user goes to the focused pane's
+    /// status line (design §5.1). There is no separate status field.
+    fn set_status(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if let Some(session) = self.focused_session() {
+            session.set_note(text);
+        }
     }
 
     fn focused_session(&mut self) -> Option<&mut Session> {
@@ -243,8 +250,8 @@ impl Workspace {
                 let mut batch = vec![first];
                 while batch.len() < 32 {
                     match rx.try_recv() {
-                        Ok(event) => batch.push(event),
-                        Err(_) => break,
+                        Some(event) => batch.push(event),
+                        None => break,
                     }
                 }
                 if this
@@ -276,6 +283,7 @@ impl Workspace {
                 }
                 IoEvent::CommandFailed(error) => pane.session.note_command_failed(error),
                 IoEvent::Pins(pins) => pane.session.note_pins(pins),
+                IoEvent::ApplyFailed(error) => pane.session.note_apply_failed(error),
                 IoEvent::Dropped { bytes } => pane.session.note_dropped(bytes),
             }
         }
@@ -301,12 +309,14 @@ impl Workspace {
         pane.session.set_usb_identity(usb);
         match pane.session.connect(params) {
             Ok(rx) => {
-                self.status.clear();
+                if let Some(session) = self.focused_session() {
+                    session.clear_note();
+                }
                 self.attach(id, rx, cx);
                 self.palette = false;
                 self.page = Page::Root;
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => self.set_status(error.to_string()),
         }
     }
 
@@ -315,12 +325,12 @@ impl Workspace {
             return;
         }
         let Some(path) = self.settings_path.clone() else {
-            self.status = "APPDATA が空なので設定を書けない".into();
+            self.set_status("APPDATA が空なので設定を書けない");
             return;
         };
         if let Err(error) = save_settings_file(&path, &self.settings) {
             self.save_allowed = false;
-            self.status = error;
+            self.set_status(error);
         }
     }
 }
@@ -350,7 +360,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::About, _, cx| {
-                this.status = format!("rs-term {}", env!("CARGO_PKG_VERSION"));
+                this.set_status(format!("rs-term {}", env!("CARGO_PKG_VERSION")));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::Connect, _, cx| {
@@ -412,7 +422,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::ResizeMode, _, cx| {
-                this.layout.toggle_resize_mode();
+                this.resize = !this.resize;
                 cx.notify();
             }))
             .on_action(
@@ -530,3 +540,38 @@ impl Render for Workspace {
 }
 
 include!("workspace_methods.rs");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review R03: a message written to a field that is never drawn is lost.
+    /// The UI keeps no status string; every message goes to a pane.
+    #[test]
+    fn no_status_side_channel() {
+        for source in [
+            include_str!("workspace.rs"),
+            include_str!("workspace_methods.rs"),
+        ] {
+            assert!(
+                !source.contains(concat!("status", ": String")),
+                "a status field came back"
+            );
+        }
+    }
+
+    /// Review R01: nothing is injected into a pane at startup.
+    #[test]
+    fn startup_grid_is_empty() {
+        let (layout, panes) = sessions_from_settings(&rs_term_core::Settings::default());
+        assert_eq!(layout.panes().len(), 1);
+        for pane in panes.values() {
+            let snap = pane.session.screen_content();
+            let text: String = snap.cells.iter().map(|cell| cell.text.as_str()).collect();
+            assert!(
+                text.chars().all(|ch| ch == ' ' || ch.is_control()),
+                "{text:?}"
+            );
+        }
+    }
+}

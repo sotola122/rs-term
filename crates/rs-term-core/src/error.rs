@@ -40,7 +40,9 @@ pub enum LogError {
     /// This pane already logs to a different file.
     AlreadyRunning,
     InvalidName(String),
-    Io { message: String },
+    Io {
+        message: String,
+    },
 }
 
 impl fmt::Display for OpenError {

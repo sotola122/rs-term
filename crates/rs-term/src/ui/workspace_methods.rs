@@ -84,7 +84,7 @@ impl Workspace {
     fn log_simple(&mut self, command: LogCommand, cx: &mut Context<Self>) {
         if let Some(session) = self.focused_session() {
             if let Err(error) = session.log(command) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         cx.notify();
@@ -109,7 +109,7 @@ impl Workspace {
         };
         if let Some(session) = self.focused_session() {
             if let Err(error) = session.apply_input(Input::Text(text)) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         cx.notify();
@@ -121,7 +121,7 @@ impl Workspace {
         }
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
-        if self.layout.resize_mode() {
+        if self.resize {
             let direction = match key {
                 "h" | "left" => Some(Direction::Left),
                 "j" | "down" => Some(Direction::Down),
@@ -136,7 +136,7 @@ impl Workspace {
                 return;
             }
             if matches!(key, "escape" | "enter") && !modifiers.control && !modifiers.alt {
-                self.layout.exit_resize_mode();
+                self.resize = false;
                 cx.notify();
                 return;
             }
@@ -185,7 +185,7 @@ impl Workspace {
         };
         if let Some(session) = self.focused_session() {
             if let Err(error) = session.apply_input(Input::Key(input)) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         cx.notify();
@@ -350,7 +350,7 @@ impl Workspace {
             let mut params = session.params().clone();
             params.baud_rate = baud;
             if let Err(error) = session.set_serial_params(params) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
             self.palette = false;
             self.page = Page::Root;
@@ -424,7 +424,7 @@ impl Workspace {
             self.connect_focused(cx);
         } else if let Some(session) = self.focused_session() {
             if let Err(error) = session.set_dtr(on) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
             self.finish_page();
             self.remember_layout();
@@ -436,7 +436,7 @@ impl Workspace {
     fn pick_rts(&mut self, row: usize, cx: &mut Context<Self>) {
         if let Some(session) = self.focused_session() {
             if let Err(error) = session.set_rts(row == 1) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         self.finish_page();
@@ -501,10 +501,10 @@ impl Workspace {
 
     fn send_query(&mut self, query: &str, cx: &mut Context<Self>) {
         if query.is_empty() {
-            self.status = "送る文字列が空".into();
+            self.set_status("送る文字列が空");
         } else if let Some(session) = self.focused_session() {
             if let Err(error) = session.apply_input(Input::Text(query.to_string())) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         self.finish_page();
@@ -558,7 +558,7 @@ impl Workspace {
             query.to_string()
         };
         if let Err(error) = validate_log_name(&name) {
-            self.status = error.to_string();
+            self.set_status(error.to_string());
             cx.notify();
             return;
         }
@@ -570,7 +570,7 @@ impl Workspace {
         let dir = match log_dir(&self.settings) {
             Ok(dir) => dir,
             Err(error) => {
-                self.status = error;
+                self.set_status(error);
                 cx.notify();
                 return;
             }
@@ -595,7 +595,7 @@ impl Workspace {
         };
         if let Some(session) = self.focused_session() {
             if let Err(error) = session.log(LogCommand::Start(target)) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
         self.finish_page();
@@ -607,7 +607,7 @@ impl Workspace {
             let mut params = session.params().clone();
             edit(&mut params);
             if let Err(error) = session.set_serial_params(params) {
-                self.status = error.to_string();
+                self.set_status(error.to_string());
             }
         }
     }
@@ -618,31 +618,7 @@ impl Workspace {
         self.wizard = false;
     }
 
-    fn remember_layout(&mut self) {
-        self.settings.layout.tree = view_to_settings(&self.layout.view());
-        self.settings.layout.panes = self
-            .layout
-            .panes()
-            .into_iter()
-            .filter_map(|id| {
-                let pane = self.panes.get(&id)?;
-                let params = pane.session.params();
-                Some(PaneSettings {
-                    id,
-                    path: params.path.clone(),
-                    baud_rate: params.baud_rate,
-                    data_bits: params.data_bits,
-                    parity: params.parity,
-                    stop_bits: params.stop_bits,
-                    flow: params.flow,
-                    dtr_on_open: params.dtr_on_open,
-                    rts: params.rts,
-                    encoding: pane.session.encoding(),
-                    newline: pane.session.newline(),
-                })
-            })
-            .collect();
-    }
+    fn remember_layout(&mut self) {}
 
     fn reopen_saved(&mut self, cx: &mut Context<Self>) {
         let ids = self.layout.panes();
@@ -657,7 +633,7 @@ impl Workspace {
             let connected = self.panes.get_mut(&id).map(|pane| pane.session.connect(params));
             match connected {
                 Some(Ok(rx)) => self.attach(id, rx, cx),
-                Some(Err(error)) => self.status = error.to_string(),
+                Some(Err(error)) => self.set_status(error.to_string()),
                 None => {}
             }
         }
@@ -957,7 +933,7 @@ impl Workspace {
             LogSession::Failed { message, .. } => message.as_str(),
         };
         let zoom = if self.layout.zoomed() && self.layout.focus() == id { " ズーム" } else { "" };
-        let resize = if self.layout.resize_mode() { " リサイズ" } else { "" };
+        let resize = if self.resize { " リサイズ" } else { "" };
         let note = pane.session.note();
         let flow = if params.flow == Flow::RtsCts { " CTS送信" } else { "" };
         format!(
@@ -979,82 +955,24 @@ pub fn open(cx: &mut App) {
 }
 
 fn sessions_from_settings(settings: &rs_term_core::Settings) -> (Layout, std::collections::HashMap<u64, Pane>) {
-    let layout = Layout::from_saved(settings_to_view(&settings.layout.tree));
+    let layout = Layout::single(1);
     let mut panes = std::collections::HashMap::new();
     for id in layout.panes() {
-        let stored = settings.layout.panes.iter().find(|pane| pane.id == id);
         let mut session = Session::new(SessionConfig {
             screen: ScreenConfig {
                 columns: settings.terminal.columns,
                 rows: settings.terminal.rows,
                 scrollback: settings.terminal.scrollback,
             },
-            encoding: stored.map(|pane| pane.encoding).unwrap_or(settings.encoding),
-            newline: stored.map(|pane| pane.newline).unwrap_or(settings.newline),
+            encoding: settings.encoding,
+            newline: settings.newline,
             local_echo: settings.terminal.local_echo,
         });
         session.set_reconnect_enabled(settings.serial.reconnect);
-        let params = if let Some(stored) = stored {
-            SerialParams {
-                path: stored.path.clone(),
-                baud_rate: stored.baud_rate,
-                data_bits: stored.data_bits,
-                parity: stored.parity,
-                stop_bits: stored.stop_bits,
-                flow: stored.flow,
-                dtr_on_open: stored.dtr_on_open,
-                rts: stored.rts,
-                read_timeout: std::time::Duration::from_millis(settings.serial.read_timeout_ms),
-            }
-        } else {
-            params_from_settings(settings, String::new())
-        };
-        let _ = session.set_serial_params(params);
+        let _ = session.set_serial_params(params_from_settings(settings, String::new()));
         panes.insert(id, Pane { session, _io: None });
     }
     (layout, panes)
-}
-
-fn settings_to_view(node: &LayoutNode) -> ViewNode {
-    match node {
-        LayoutNode::Leaf { id } => ViewNode::Leaf(*id),
-        LayoutNode::Split {
-            axis,
-            ratio_millis,
-            first,
-            second,
-        } => ViewNode::Split {
-            axis: match axis {
-                SettingsAxis::Horizontal => Axis::SideBySide,
-                SettingsAxis::Vertical => Axis::Stacked,
-            },
-            ratio: *ratio_millis as f32 / 1000.0,
-            path: Vec::new(),
-            first: Box::new(settings_to_view(first)),
-            second: Box::new(settings_to_view(second)),
-        },
-    }
-}
-
-fn view_to_settings(node: &ViewNode) -> LayoutNode {
-    match node {
-        ViewNode::Leaf(id) => LayoutNode::Leaf { id: *id },
-        ViewNode::Split {
-            axis,
-            ratio,
-            first,
-            second,
-            ..
-        } => LayoutNode::Split {
-            axis: match axis {
-                Axis::SideBySide => SettingsAxis::Horizontal,
-                Axis::Stacked => SettingsAxis::Vertical,
-            },
-            ratio_millis: (ratio * 1000.0).round().clamp(50.0, 950.0) as u16,
-            first: Box::new(view_to_settings(first)),
-            second: Box::new(view_to_settings(second)),
-        },
-    }
 }
 
 fn params_from_settings(settings: &rs_term_core::Settings, path: String) -> SerialParams {

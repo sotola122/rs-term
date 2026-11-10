@@ -27,15 +27,22 @@ runs:
           libfontconfig1-dev \
           libvulkan-dev
 
-    - uses: dtolnay/rust-toolchain@1.95.0
-      with:
-        components: clippy, rustfmt
+    # The toolchain is read from rust-toolchain.toml, the one place the
+    # version is written (review N23). rustup then selects it in this repo.
+    - name: Install the repo toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+        test -n "$channel"
+        rustup toolchain install "$channel" --profile minimal --component clippy,rustfmt
+        rustup default "$channel"
 
     - name: Add Rust targets
       if: ${{ inputs.targets != '' }}
       shell: bash
       env:
         TARGETS: ${{ inputs.targets }}
-      run: rustup target add "$TARGETS"
+      run: rustup target add $TARGETS
 
     - uses: Swatinem/rust-cache@v2

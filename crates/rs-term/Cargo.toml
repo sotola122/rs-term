@@ -11,3 +11,5 @@ description = "Windows-first serial terminal"
 rs-term-core = { path = "../rs-term-core" }
 gpui-kit.workspace = true
 chrono.workspace = true
+serde.workspace = true
+toml.workspace = true

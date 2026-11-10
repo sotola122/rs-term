@@ -15,10 +15,9 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{
-    self, Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler,
-    Hyperlink, KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode,
-    NamedColor, PrivateMode, Processor, Rgb as VteRgb,
-    StandardCharset, TabulationClearMode,
+    self, Attr, CharsetIndex, ClearMode, Color, CursorShape, CursorStyle, Handler, Hyperlink,
+    KeyboardModes, KeyboardModesApplyBehavior, LineClearMode, Mode, NamedColor, PrivateMode,
+    Processor, Rgb as VteRgb, StandardCharset, TabulationClearMode,
 };
 
 use crate::codec::{Codec, Newline, NewlineConverter, SessionEncoding};
