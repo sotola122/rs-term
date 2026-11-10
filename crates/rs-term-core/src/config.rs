@@ -174,7 +174,6 @@ pub struct Settings {
     pub terminal: TerminalSettings,
     pub ui: UiSettings,
     pub log: LogSettings,
-    pub layout: LayoutSettings,
     pub warnings: Vec<String>,
 }
 
@@ -218,48 +217,6 @@ pub struct LogSettings {
     pub rotate_keep: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct LayoutSettings {
-    pub tree: LayoutNode,
-    pub panes: Vec<PaneSettings>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum LayoutNode {
-    Leaf {
-        id: u64,
-    },
-    Split {
-        axis: Axis,
-        ratio_millis: u16,
-        first: Box<LayoutNode>,
-        second: Box<LayoutNode>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Axis {
-    /// Side by side. This is herdr's vertical split and GPUI `h_resizable`.
-    Horizontal,
-    /// Stacked. This is herdr's horizontal split and GPUI `v_resizable`.
-    Vertical,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaneSettings {
-    pub id: u64,
-    pub path: String,
-    pub baud_rate: u32,
-    pub data_bits: crate::DataBits,
-    pub parity: crate::Parity,
-    pub stop_bits: crate::StopBits,
-    pub flow: crate::Flow,
-    pub dtr_on_open: Option<bool>,
-    pub rts: bool,
-    pub encoding: SessionEncoding,
-    pub newline: Newline,
-}
-
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -300,38 +257,7 @@ impl Default for Settings {
                 rotate_bytes: 10_485_760,
                 rotate_keep: 5,
             },
-            layout: LayoutSettings {
-                tree: LayoutNode::Leaf { id: 1 },
-                panes: vec![PaneSettings::from_serial(&SerialSettings {
-                    baud_rate: 115_200,
-                    data_bits: crate::DataBits::Eight,
-                    parity: crate::Parity::None,
-                    stop_bits: crate::StopBits::One,
-                    flow: crate::Flow::None,
-                    read_timeout_ms: 20,
-                    reconnect: false,
-                    reopen_on_start: false,
-                })],
-            },
             warnings: Vec::new(),
-        }
-    }
-}
-
-impl PaneSettings {
-    fn from_serial(serial: &SerialSettings) -> Self {
-        Self {
-            id: 1,
-            path: String::new(),
-            baud_rate: serial.baud_rate,
-            data_bits: serial.data_bits,
-            parity: serial.parity,
-            stop_bits: serial.stop_bits,
-            flow: serial.flow,
-            dtr_on_open: None,
-            rts: false,
-            encoding: SessionEncoding::ShiftJis,
-            newline: Newline::default(),
         }
     }
 }
@@ -346,8 +272,6 @@ struct RawSettings {
     terminal: RawTerminal,
     ui: RawUi,
     log: RawLog,
-    #[serde(default)]
-    layout: RawLayout,
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,59 +332,6 @@ struct RawLog {
     text_encoding: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawLayout {
-    #[serde(default = "default_raw_tree")]
-    tree: RawNode,
-    #[serde(default)]
-    panes: Vec<RawPane>,
-}
-
-impl Default for RawLayout {
-    fn default() -> Self {
-        Self {
-            tree: default_raw_tree(),
-            panes: Vec::new(),
-        }
-    }
-}
-
-fn default_raw_tree() -> RawNode {
-    RawNode::Leaf { id: 1 }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum RawNode {
-    Leaf {
-        id: u64,
-    },
-    Split {
-        axis: String,
-        ratio_millis: u16,
-        first: Box<RawNode>,
-        second: Box<RawNode>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawPane {
-    id: u64,
-    path: String,
-    baud_rate: u32,
-    data_bits: String,
-    parity: String,
-    stop_bits: String,
-    flow: String,
-    dtr: String,
-    rts: bool,
-    encoding: String,
-    receive: String,
-    transmit: String,
-}
-
 #[derive(Debug, Serialize)]
 struct SavedSettings {
     schema: u32,
@@ -470,7 +341,6 @@ struct SavedSettings {
     terminal: SavedTerminal,
     ui: SavedUi,
     log: SavedLog,
-    layout: SavedLayout,
 }
 
 #[derive(Debug, Serialize)]
@@ -525,42 +395,6 @@ struct SavedLog {
     text_encoding: &'static str,
 }
 
-#[derive(Debug, Serialize)]
-struct SavedLayout {
-    tree: SavedNode,
-    panes: Vec<SavedPane>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum SavedNode {
-    Leaf {
-        id: u64,
-    },
-    Split {
-        axis: &'static str,
-        ratio_millis: u16,
-        first: Box<SavedNode>,
-        second: Box<SavedNode>,
-    },
-}
-
-#[derive(Debug, Serialize)]
-struct SavedPane {
-    id: u64,
-    path: String,
-    baud_rate: u32,
-    data_bits: &'static str,
-    parity: &'static str,
-    stop_bits: &'static str,
-    flow: &'static str,
-    dtr: &'static str,
-    rts: bool,
-    encoding: &'static str,
-    receive: &'static str,
-    transmit: &'static str,
-}
-
 /// Windows settings path. Empty or missing `APPDATA` is `None`.
 pub fn windows_settings_path(appdata: Option<&str>) -> Option<PathBuf> {
     let appdata = appdata.filter(|value| !value.is_empty())?;
@@ -580,15 +414,16 @@ pub fn windows_log_dir(local_appdata: Option<&str>) -> Option<PathBuf> {
 }
 
 pub fn load_settings_str(text: &str) -> Result<Settings, String> {
-    let raw: RawSettings = toml::from_str(text).map_err(|error| error.to_string())?;
+    let raw: RawSettings =
+        toml::from_str(text).map_err(|error| format!("TOML として読めない: {error}"))?;
     if raw.schema != 1 {
-        return Err(format!("schema {} は読めない", raw.schema));
+        return Err(format!("schema {} は読めない（1 だけ）", raw.schema));
     }
     interpret(raw)
 }
 
 pub fn load_settings_file(path: &Path) -> Result<Settings, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let text = fs::read_to_string(path).map_err(|error| format!("読めない（OS: {error}）"))?;
     load_settings_str(&text)
 }
 
@@ -618,34 +453,36 @@ fn tmp_path(path: &Path) -> PathBuf {
 
 fn interpret(raw: RawSettings) -> Result<Settings, String> {
     if !(1..=4_000_000).contains(&raw.serial.baud_rate) {
-        return Err("baud_rate が範囲外".into());
+        return Err("serial.baud_rate が範囲外（1〜4000000）".into());
     }
-    if raw.serial.read_timeout_ms == 0 || raw.serial.read_timeout_ms > 60_000 {
-        return Err("read_timeout_ms が範囲外".into());
+    // Commands are taken between reads, so the timeout bounds key latency
+    // and the stop time (review N13).
+    if raw.serial.read_timeout_ms == 0 || raw.serial.read_timeout_ms > 100 {
+        return Err("serial.read_timeout_ms が範囲外（1〜100）".into());
     }
     if raw.terminal.scrollback > 100_000 {
-        return Err("scrollback が範囲外".into());
+        return Err("terminal.scrollback が範囲外（0〜100000）".into());
     }
     if raw.terminal.columns == 0
         || raw.terminal.rows == 0
         || raw.terminal.columns > 500
         || raw.terminal.rows > 500
     {
-        return Err("columns または rows が範囲外".into());
+        return Err("terminal.columns または rows が範囲外（1〜500）".into());
     }
     if !(1.0..=72.0).contains(&raw.terminal.font_size_px)
         || !(1.0..=72.0).contains(&raw.ui.font_size_px)
     {
-        return Err("font_size_px が範囲外".into());
+        return Err("font_size_px が範囲外（1〜72）".into());
     }
     if !(64 * 1024..=1024 * 1024 * 1024).contains(&raw.log.rotate_bytes) {
-        return Err("rotate_bytes が範囲外".into());
+        return Err("log.rotate_bytes が範囲外（64 KiB〜1 GiB）".into());
     }
     if !(1..=20).contains(&raw.log.rotate_keep) {
-        return Err("rotate_keep が範囲外".into());
+        return Err("log.rotate_keep が範囲外（1〜20）".into());
     }
     if raw.log.text_encoding != "utf-8" {
-        return Err("text_encoding は utf-8 だけ".into());
+        return Err("log.text_encoding は utf-8 だけ".into());
     }
     let mut warnings = Vec::new();
     let mut palette = raw.terminal.palette;
@@ -660,7 +497,6 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
         warnings.push(format!("ui.theme_mode `{theme_mode}` は未知なので dark"));
         theme_mode = "dark".into();
     }
-    let layout = interpret_layout(raw.layout)?;
     Ok(Settings {
         serial: SerialSettings {
             baud_rate: raw.serial.baud_rate,
@@ -699,79 +535,8 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
             rotate_bytes: raw.log.rotate_bytes,
             rotate_keep: raw.log.rotate_keep,
         },
-        layout,
         warnings,
     })
-}
-
-fn interpret_layout(raw: RawLayout) -> Result<LayoutSettings, String> {
-    let tree = interpret_node(raw.tree)?;
-    let mut panes = Vec::new();
-    for pane in raw.panes {
-        if !(1..=4_000_000).contains(&pane.baud_rate) {
-            return Err("pane baud_rate が範囲外".into());
-        }
-        panes.push(PaneSettings {
-            id: pane.id,
-            path: pane.path,
-            baud_rate: pane.baud_rate,
-            data_bits: parse_data_bits(&pane.data_bits)?,
-            parity: parse_parity(&pane.parity)?,
-            stop_bits: parse_stop(&pane.stop_bits)?,
-            flow: parse_flow(&pane.flow)?,
-            dtr_on_open: match pane.dtr.as_str() {
-                "off" => None,
-                "on" => Some(true),
-                other => return Err(format!("dtr `{other}` は未知")),
-            },
-            rts: pane.rts,
-            encoding: parse_encoding(&pane.encoding)?,
-            newline: Newline {
-                receive: parse_receive(&pane.receive)?,
-                transmit: parse_transmit(&pane.transmit)?,
-            },
-        });
-    }
-    if panes.is_empty() {
-        panes.push(PaneSettings::from_serial(&SerialSettings {
-            baud_rate: 115_200,
-            data_bits: crate::DataBits::Eight,
-            parity: crate::Parity::None,
-            stop_bits: crate::StopBits::One,
-            flow: crate::Flow::None,
-            read_timeout_ms: 20,
-            reconnect: false,
-            reopen_on_start: false,
-        }));
-    }
-    Ok(LayoutSettings { tree, panes })
-}
-
-fn interpret_node(raw: RawNode) -> Result<LayoutNode, String> {
-    match raw {
-        RawNode::Leaf { id } => Ok(LayoutNode::Leaf { id }),
-        RawNode::Split {
-            axis,
-            ratio_millis,
-            first,
-            second,
-        } => {
-            if !(50..=950).contains(&ratio_millis) {
-                return Err(format!("ratio_millis {ratio_millis} が範囲外"));
-            }
-            let axis = match axis.as_str() {
-                "horizontal" => Axis::Horizontal,
-                "vertical" => Axis::Vertical,
-                other => return Err(format!("axis `{other}` は未知")),
-            };
-            Ok(LayoutNode::Split {
-                axis,
-                ratio_millis,
-                first: Box::new(interpret_node(*first)?),
-                second: Box::new(interpret_node(*second)?),
-            })
-        }
-    }
 }
 
 fn saved(settings: &Settings) -> SavedSettings {
@@ -817,52 +582,6 @@ fn saved(settings: &Settings) -> SavedSettings {
             rotate_keep: settings.log.rotate_keep,
             text_encoding: "utf-8",
         },
-        layout: SavedLayout {
-            tree: saved_node(&settings.layout.tree),
-            panes: settings
-                .layout
-                .panes
-                .iter()
-                .map(|pane| SavedPane {
-                    id: pane.id,
-                    path: pane.path.clone(),
-                    baud_rate: pane.baud_rate,
-                    data_bits: data_bits_name(pane.data_bits),
-                    parity: parity_name(pane.parity),
-                    stop_bits: stop_name(pane.stop_bits),
-                    flow: flow_name(pane.flow),
-                    dtr: if pane.dtr_on_open == Some(true) {
-                        "on"
-                    } else {
-                        "off"
-                    },
-                    rts: pane.rts,
-                    encoding: encoding_name(pane.encoding),
-                    receive: receive_name(pane.newline.receive),
-                    transmit: transmit_name(pane.newline.transmit),
-                })
-                .collect(),
-        },
-    }
-}
-
-fn saved_node(node: &LayoutNode) -> SavedNode {
-    match node {
-        LayoutNode::Leaf { id } => SavedNode::Leaf { id: *id },
-        LayoutNode::Split {
-            axis,
-            ratio_millis,
-            first,
-            second,
-        } => SavedNode::Split {
-            axis: match axis {
-                Axis::Horizontal => "horizontal",
-                Axis::Vertical => "vertical",
-            },
-            ratio_millis: *ratio_millis,
-            first: Box::new(saved_node(first)),
-            second: Box::new(saved_node(second)),
-        },
     }
 }
 
@@ -902,7 +621,7 @@ pub fn parse_flow(text: &str) -> Result<crate::Flow, String> {
     }
 }
 
-fn parse_receive(text: &str) -> Result<ReceiveNewline, String> {
+pub fn parse_receive(text: &str) -> Result<ReceiveNewline, String> {
     match text {
         "cr" => Ok(ReceiveNewline::Cr),
         "crlf" => Ok(ReceiveNewline::CrLf),
@@ -912,7 +631,7 @@ fn parse_receive(text: &str) -> Result<ReceiveNewline, String> {
     }
 }
 
-fn parse_transmit(text: &str) -> Result<TransmitNewline, String> {
+pub fn parse_transmit(text: &str) -> Result<TransmitNewline, String> {
     match text {
         "cr" => Ok(TransmitNewline::Cr),
         "crlf" => Ok(TransmitNewline::CrLf),
@@ -921,7 +640,7 @@ fn parse_transmit(text: &str) -> Result<TransmitNewline, String> {
     }
 }
 
-fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
+pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
     match text {
         "utf-8" => Ok(SessionEncoding::Utf8),
         "shift_jis" => Ok(SessionEncoding::ShiftJis),
@@ -929,7 +648,7 @@ fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
     }
 }
 
-fn data_bits_name(value: crate::DataBits) -> &'static str {
+pub fn data_bits_name(value: crate::DataBits) -> &'static str {
     match value {
         crate::DataBits::Five => "five",
         crate::DataBits::Six => "six",
@@ -938,7 +657,7 @@ fn data_bits_name(value: crate::DataBits) -> &'static str {
     }
 }
 
-fn parity_name(value: crate::Parity) -> &'static str {
+pub fn parity_name(value: crate::Parity) -> &'static str {
     match value {
         crate::Parity::None => "none",
         crate::Parity::Odd => "odd",
@@ -946,14 +665,14 @@ fn parity_name(value: crate::Parity) -> &'static str {
     }
 }
 
-fn stop_name(value: crate::StopBits) -> &'static str {
+pub fn stop_name(value: crate::StopBits) -> &'static str {
     match value {
         crate::StopBits::One => "one",
         crate::StopBits::Two => "two",
     }
 }
 
-fn flow_name(value: crate::Flow) -> &'static str {
+pub fn flow_name(value: crate::Flow) -> &'static str {
     match value {
         crate::Flow::None => "none",
         crate::Flow::XonXoff => "xonxoff",
@@ -961,7 +680,7 @@ fn flow_name(value: crate::Flow) -> &'static str {
     }
 }
 
-fn receive_name(value: ReceiveNewline) -> &'static str {
+pub fn receive_name(value: ReceiveNewline) -> &'static str {
     match value {
         ReceiveNewline::Cr => "cr",
         ReceiveNewline::CrLf => "crlf",
@@ -970,7 +689,7 @@ fn receive_name(value: ReceiveNewline) -> &'static str {
     }
 }
 
-fn transmit_name(value: TransmitNewline) -> &'static str {
+pub fn transmit_name(value: TransmitNewline) -> &'static str {
     match value {
         TransmitNewline::Cr => "cr",
         TransmitNewline::CrLf => "crlf",
@@ -978,7 +697,7 @@ fn transmit_name(value: TransmitNewline) -> &'static str {
     }
 }
 
-fn encoding_name(value: SessionEncoding) -> &'static str {
+pub fn encoding_name(value: SessionEncoding) -> &'static str {
     match value {
         SessionEncoding::Utf8 => "utf-8",
         SessionEncoding::ShiftJis => "shift_jis",
@@ -1058,6 +777,21 @@ text_encoding = "utf-8"
     #[test]
     fn schema_above_one_rejects_the_file() {
         let text = SAMPLE.replace("schema = 1", "schema = 2");
+        assert!(load_settings_str(&text).is_err());
+    }
+
+    #[test]
+    fn read_timeout_above_100_ms_rejects_the_file() {
+        let text = SAMPLE.replace("read_timeout_ms = 20", "read_timeout_ms = 101");
+        assert!(load_settings_str(&text).is_err());
+        let text = SAMPLE.replace("read_timeout_ms = 20", "read_timeout_ms = 100");
+        assert!(load_settings_str(&text).is_ok());
+    }
+
+    #[test]
+    fn layout_is_not_a_core_setting() {
+        // The pane tree lives in the UI crate's layout.toml (§5.7).
+        let text = format!("{SAMPLE}\n[layout]\n");
         assert!(load_settings_str(&text).is_err());
     }
 
