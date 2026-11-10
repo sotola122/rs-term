@@ -1,3 +1,6 @@
+// Not wired into the app yet: phase 2 (keymap) and phase 3 (layout.toml) connect it.
+#![allow(dead_code)]
+
 //! `layout.toml`: the pane tree and each pane's session settings.
 //!
 //! The tree is UI data (§5.7), so this file belongs to the UI crate. The

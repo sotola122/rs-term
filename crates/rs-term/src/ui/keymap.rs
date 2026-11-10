@@ -1,3 +1,6 @@
+// Not wired into the app yet: phase 2 (keymap) and phase 3 (layout.toml) connect it.
+#![allow(dead_code)]
+
 //! Pane keys, following herdr.
 //!
 //! herdr reserves one prefix key (default `ctrl+b`). The next key after it
@@ -390,17 +393,21 @@ impl Keymap {
     }
 
     fn direct(&self, event: &Chord) -> Option<PaneAction> {
-        self.bindings.iter().find_map(|(binding, action)| match binding {
-            Binding::Direct(chord) if chord.matches(event) => Some(*action),
-            _ => None,
-        })
+        self.bindings
+            .iter()
+            .find_map(|(binding, action)| match binding {
+                Binding::Direct(chord) if chord.matches(event) => Some(*action),
+                _ => None,
+            })
     }
 
     fn after_prefix(&self, event: &Chord) -> Option<PaneAction> {
-        self.bindings.iter().find_map(|(binding, action)| match binding {
-            Binding::Prefix(chord) if chord.matches(event) => Some(*action),
-            _ => None,
-        })
+        self.bindings
+            .iter()
+            .find_map(|(binding, action)| match binding {
+                Binding::Prefix(chord) if chord.matches(event) => Some(*action),
+                _ => None,
+            })
     }
 
     /// The label the palette shows, e.g. `Ctrl+B v` or `Ctrl+Alt+D`.
@@ -663,9 +670,18 @@ mod tests {
     #[test]
     fn labels_follow_herdr_names() {
         let keymap = Keymap::herdr_default();
-        assert_eq!(keymap.label(PaneAction::SplitHorizontal).unwrap(), "Ctrl+B -");
-        assert_eq!(keymap.label(PaneAction::SwapLeft).unwrap(), "Ctrl+B Shift+H");
-        assert_eq!(keymap.label(PaneAction::CyclePrevious).unwrap(), "Ctrl+B Shift+Tab");
+        assert_eq!(
+            keymap.label(PaneAction::SplitHorizontal).unwrap(),
+            "Ctrl+B -"
+        );
+        assert_eq!(
+            keymap.label(PaneAction::SwapLeft).unwrap(),
+            "Ctrl+B Shift+H"
+        );
+        assert_eq!(
+            keymap.label(PaneAction::CyclePrevious).unwrap(),
+            "Ctrl+B Shift+Tab"
+        );
         assert_eq!(keymap.label(PaneAction::ResizeLeft), None);
     }
 }
