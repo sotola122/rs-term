@@ -7,6 +7,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 
@@ -14,6 +15,9 @@ use crate::error::LogError;
 use crate::screen::TextAtom;
 
 const FLUSH_EVERY: usize = 64 * 1024;
+/// A quiet line still reaches the disk this long after the last flush
+/// (review N6). The 64 KiB bound is unchanged.
+const FLUSH_AFTER: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogSession {
@@ -72,8 +76,12 @@ pub enum LogCommand {
 pub(crate) struct LogEngine {
     state: LogSession,
     file: Option<File>,
-    lock_path: Option<PathBuf>,
+    /// `path.lock`, held with an OS file lock while the log is open. A crash
+    /// releases the OS lock, so a leftover file does not block the path
+    /// forever (review N27).
+    lock: Option<(PathBuf, File)>,
     buffer: Vec<u8>,
+    flushed_at: Instant,
     written: u64,
     last_flushed: u64,
     at_line_start: bool,
@@ -84,8 +92,9 @@ impl Default for LogEngine {
         Self {
             state: LogSession::Stopped,
             file: None,
-            lock_path: None,
+            lock: None,
             buffer: Vec::new(),
+            flushed_at: Instant::now(),
             written: 0,
             last_flushed: 0,
             at_line_start: true,
@@ -94,7 +103,9 @@ impl Default for LogEngine {
 }
 
 impl Drop for LogEngine {
+    /// Closing a pane or quitting writes the buffer first (review N5).
     fn drop(&mut self) {
+        let _ = self.flush();
         self.release_files();
     }
 }
@@ -102,6 +113,18 @@ impl Drop for LogEngine {
 impl LogEngine {
     pub(crate) fn state(&self) -> &LogSession {
         &self.state
+    }
+
+    /// Flush a buffer that has waited `FLUSH_AFTER` while running.
+    pub(crate) fn tick(&mut self) {
+        if matches!(self.state, LogSession::Running(_))
+            && !self.buffer.is_empty()
+            && self.flushed_at.elapsed() >= FLUSH_AFTER
+        {
+            if let Err(error) = self.flush() {
+                self.fail(error);
+            }
+        }
     }
 
     pub(crate) fn command(&mut self, command: LogCommand) -> Result<(), LogError> {
@@ -161,10 +184,9 @@ impl LogEngine {
                     }
                     self.write_char(&mut encoded, *ch, timestamp);
                 }
-                TextAtom::Cr => {
-                    encoded.push(b'\r');
-                    self.at_line_start = true;
-                }
+                // Only LF starts a new line for the timestamp. A lone CR
+                // overwrites the same line on screen (review N16).
+                TextAtom::Cr => encoded.push(b'\r'),
                 TextAtom::Lf => {
                     encoded.push(b'\n');
                     self.at_line_start = true;
@@ -203,7 +225,7 @@ impl LogEngine {
                 return Ok(());
             }
             LogSession::Running(_) | LogSession::Paused(_) | LogSession::Failed { .. } => {
-                return Err(LogError::Busy);
+                return Err(LogError::AlreadyRunning);
             }
             LogSession::Stopped => {}
         }
@@ -217,10 +239,13 @@ impl LogEngine {
         let lock_path = lock_path_for(&path);
         let lock = OpenOptions::new()
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(false)
             .open(&lock_path)
-            .map_err(|_| LogError::Busy)?;
-        drop(lock);
+            .map_err(|error| LogError::Io {
+                message: error.to_string(),
+            })?;
+        lock.try_lock().map_err(|_| LogError::Busy)?;
         let append = target_append(&target);
         let mut options = OpenOptions::new();
         options.create(true).write(true);
@@ -230,6 +255,7 @@ impl LogEngine {
             options.truncate(true);
         }
         let file = options.open(&path).map_err(|error| {
+            let _ = lock.unlock();
             let _ = fs::remove_file(&lock_path);
             LogError::Io {
                 message: error.to_string(),
@@ -242,8 +268,9 @@ impl LogEngine {
         };
         self.last_flushed = self.written;
         self.file = Some(file);
-        self.lock_path = Some(lock_path);
+        self.lock = Some((lock_path, lock));
         self.buffer.clear();
+        self.flushed_at = Instant::now();
         self.at_line_start = true;
         self.state = LogSession::Running(target);
         Ok(())
@@ -302,6 +329,7 @@ impl LogEngine {
             .map_err(|error| error.to_string())?;
         let flushed = self.buffer.len() as u64;
         self.buffer.clear();
+        self.flushed_at = Instant::now();
         self.written = self.written.saturating_add(flushed);
         self.last_flushed = self.written;
         file.flush().map_err(|error| error.to_string())?;
@@ -345,8 +373,10 @@ impl LogEngine {
 
     fn release_files(&mut self) {
         self.file.take();
-        if let Some(path) = self.lock_path.take() {
-            let _ = fs::remove_file(path);
+        if let Some((path, lock)) = self.lock.take() {
+            let _ = lock.unlock();
+            drop(lock);
+            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -388,6 +418,7 @@ fn file_name(target: &LogTarget) -> Result<String, LogError> {
 
 pub fn validate_log_name(name: &str) -> Result<(), LogError> {
     if name.is_empty()
+        || name.chars().any(|ch| ch.is_control())
         || name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
         || name.contains("..")
         || name.ends_with(' ')
@@ -478,7 +509,7 @@ mod tests {
         assert!(validate_log_name("com10.log").is_ok());
         assert!(validate_log_name("COM10.log").is_ok());
         for bad in [
-            "COM1.log", "aux.txt", "a/b", r"a\b", "..", "a..b", "ends.", "ends ",
+            "COM1.log", "aux.txt", "a/b", r"a\b", "..", "a..b", "ends.", "ends ", "a\tb", "x\u{1}",
         ] {
             assert!(validate_log_name(bad).is_err(), "{bad}");
         }
@@ -548,6 +579,113 @@ mod tests {
             Err(LogError::Busy)
         );
         drop(first);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn text_target(path: &Path, timestamp: Option<Timestamp>) -> LogTarget {
+        LogTarget::Text {
+            path: path.to_path_buf(),
+            append: false,
+            rotate: Rotate {
+                max_bytes: 1024 * 1024,
+                keep: 2,
+            },
+            encoding: LogEncoding::Utf8,
+            plain: false,
+            bom: false,
+            timestamp,
+        }
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rs-term-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn dropping_the_engine_writes_the_buffer() {
+        let dir = temp_dir("log-drop");
+        let path = dir.join("drop.log");
+        let mut log = LogEngine::default();
+        log.command(LogCommand::Start(text_target(&path, None)))
+            .unwrap();
+        log.record_text(&[TextAtom::Char('x'), TextAtom::Lf]);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+        drop(log);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "x\n");
+        assert!(!lock_path_for(&path).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quiet_buffer_is_flushed_by_tick() {
+        let dir = temp_dir("log-tick");
+        let path = dir.join("tick.log");
+        let mut log = LogEngine::default();
+        log.command(LogCommand::Start(text_target(&path, None)))
+            .unwrap();
+        log.record_text(&[TextAtom::Char('q')]);
+        log.tick();
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0, "too early");
+        log.flushed_at = Instant::now() - FLUSH_AFTER;
+        log.tick();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "q");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lone_cr_does_not_start_a_timestamped_line() {
+        let dir = temp_dir("log-cr");
+        let path = dir.join("cr.log");
+        let mut log = LogEngine::default();
+        log.command(LogCommand::Start(text_target(
+            &path,
+            Some(Timestamp::LocalFixed),
+        )))
+        .unwrap();
+        log.record_text(&[
+            TextAtom::Char('a'),
+            TextAtom::Cr,
+            TextAtom::Char('b'),
+            TextAtom::Lf,
+            TextAtom::Char('c'),
+        ]);
+        log.command(LogCommand::Stop).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert_eq!(lines.len(), 2, "{text:?}");
+        // "YYYY-MM-DD HH:MM:SS " is 20 characters, once per LF line.
+        assert_eq!(&lines[0][20..], "a\rb");
+        assert_eq!(&lines[1][20..], "c");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_leftover_lock_file_does_not_block_the_path() {
+        let dir = temp_dir("log-stale");
+        let path = dir.join("stale.log");
+        // A crash leaves the file but not the OS lock.
+        fs::write(lock_path_for(&path), b"").unwrap();
+        let mut log = LogEngine::default();
+        log.command(LogCommand::Start(text_target(&path, None)))
+            .unwrap();
+        log.command(LogCommand::Stop).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_target_in_the_same_pane_is_already_running() {
+        let dir = temp_dir("log-twice");
+        let mut log = LogEngine::default();
+        log.command(LogCommand::Start(text_target(&dir.join("a.log"), None)))
+            .unwrap();
+        assert_eq!(
+            log.command(LogCommand::Start(text_target(&dir.join("b.log"), None))),
+            Err(LogError::AlreadyRunning)
+        );
+        log.command(LogCommand::Stop).unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 }

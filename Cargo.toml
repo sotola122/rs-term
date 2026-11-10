@@ -6,7 +6,7 @@ members = ["crates/rs-term-core", "crates/rs-term"]
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-rust-version = "1.88"
+rust-version = "1.95"
 
 [workspace.dependencies]
 alacritty_terminal = "=0.26.0"
