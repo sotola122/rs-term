@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740">
+<title>起動直後：1 枚・未接続</title>
+<rect x="0" y="0" width="1200" height="740" fill="#3b3d45" rx="0"/>
+<rect x="0" y="0" width="1200" height="32" fill="#f3f3f3" rx="0"/>
+<text x="12" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="13" fill="#222" font-weight="normal" text-anchor="start" xml:space="preserve">rs-term</text>
+<text x="1080" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">—</text>
+<text x="1126" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">☐</text>
+<text x="1172" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">✕</text>
+<text x="1192" y="734" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="10" fill="#9aa0aa" font-weight="normal" text-anchor="end" xml:space="preserve">OS キャプション（上 32px）は実装では描かない</text>
+<clipPath id="p1"><rect x="0" y="32" width="1200" height="708"/></clipPath>
+<g clip-path="url(#p1)">
+<rect x="0" y="32" width="1200" height="708" fill="#1e1f24" rx="0"/>
+<text x="10" y="54" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">（未接続）  Ctrl+Shift+K で接続</text>
+<rect x="0" y="716" width="1200" height="24" fill="#2a2c33" rx="0"/>
+<line x1="0" y1="716.5" x2="1200" y2="716.5" stroke="#3b3d45" stroke-width="1"/>
+<circle cx="14" cy="728" r="4" fill="#777777"/>
+<text x="23" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">未接続</text>
+<text x="80.2" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="101.4" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="122.60000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Shift_JIS</text>
+<text x="201.4" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">LOG off</text>
+</g>
+<rect x="0.5" y="32.5" width="1199" height="707" fill="none" stroke="#4a8cff" stroke-width="1" rx="0"/>
+</svg>
