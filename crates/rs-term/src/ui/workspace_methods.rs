@@ -748,7 +748,13 @@ impl Workspace {
 
     fn pane_view(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let focused = self.layout.focus() == id;
-        let info = self.info_line(id);
+        let status_facts = self.status_facts(id, focused);
+        let overlay = self.panes.get(&id).is_some_and(|pane| {
+            matches!(
+                pane.session.link(),
+                Link::Disconnected
+            ) && pane.session.screen_content().cells.iter().all(|cell| cell.text.is_empty() || cell.text == " ")
+        });
         let snap = self.panes.get(&id).map(|pane| pane.session.screen_content());
         let palette = palette_by_name(&self.settings.terminal.palette).unwrap_or_else(rs_term_core::classic_dark);
         let font_name = self.terminal_font.clone();
@@ -784,7 +790,6 @@ impl Workspace {
         let line_px = self.line_px;
         let slots = self.grid_bounds.clone();
         let weak = cx.entity().downgrade();
-        let move_focus = weak.clone();
         let wheel = weak.clone();
         let drag = weak.clone();
         let release = weak.clone();
@@ -798,22 +803,9 @@ impl Workspace {
             .border_color(if focused { gpui::rgb(0x4c9aff) } else { gpui::rgb(0x333333) })
             .child(
                 div()
-                    .h(px(22.0))
-                    .px_2()
-                    .text_xs()
-                    .text_color(gpui::rgb(0xdddddd))
-                    .bg(gpui::rgb(0x252525))
-                    .child(info)
-                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                        let _ = move_focus.update(cx, |this, cx| {
-                            this.layout.focus_id(id);
-                            cx.notify();
-                        });
-                    }),
-            )
-            .child(
-                div()
                     .flex_1()
+                    .min_h_0()
+                    .relative()
                     .on_mouse_down(MouseButton::Left, {
                         let weak = weak.clone();
                         move |event: &MouseDownEvent, _window, cx| {
@@ -854,8 +846,19 @@ impl Workspace {
                                 cx,
                             );
                         },
-                    )),
+                    ))
+                    .when(overlay, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top(px(8.0))
+                                .left(px(10.0))
+                                .text_color(gpui::rgb(0x7a7d86))
+                                .child("（未接続）  Ctrl+Shift+K で接続"),
+                        )
+                    }),
             )
+            .child(status_bar(&status_facts, focused))
             .into_any_element()
     }
 
@@ -914,40 +917,114 @@ impl Workspace {
         Some((row as i32 - snap.display_offset as i32, column))
     }
 
-    fn info_line(&self, id: u64) -> String {
-        let Some(pane) = self.panes.get(&id) else {
-            return String::new();
+    /// The facts the status line of pane `id` shows (design §3).
+    fn status_facts(&self, id: u64, focused: bool) -> status::Facts {
+        let pane = self.panes.get(&id);
+        let session = pane.map(|pane| &pane.session);
+        let params = session.map(|session| session.params().clone());
+        let port = params.as_ref().map(|params| params.path.clone()).unwrap_or_default();
+        let link = match session.map(|session| session.link().clone()) {
+            None | Some(Link::Disconnected) if port.is_empty() => status::LinkView::Unchosen,
+            None | Some(Link::Disconnected) => status::LinkView::Disconnected(port),
+            Some(Link::Opening { .. }) => status::LinkView::Opening(port),
+            Some(Link::Open { .. }) => status::LinkView::Open(port),
+            Some(Link::Lost { .. }) => status::LinkView::Lost(port),
         };
-        let params = pane.session.params();
-        let port = if params.path.is_empty() { "未接続" } else { params.path.as_str() };
-        let link = match pane.session.link() {
-            Link::Disconnected => "切断",
-            Link::Opening { .. } => "接続中",
-            Link::Open { .. } => "接続",
-            Link::Lost { .. } => "切断(喪失)",
+        let frame = params.as_ref().and_then(|params| {
+            (!params.path.is_empty()).then_some((
+                params.baud_rate,
+                params.data_bits,
+                params.parity,
+                params.stop_bits,
+            ))
+        });
+        let encoding = match session.map(|session| session.encoding()) {
+            Some(rs_term_core::SessionEncoding::Utf8) => "UTF-8",
+            _ => "Shift_JIS",
         };
-        let log = match pane.session.log_state() {
-            LogSession::Stopped => "ログなし",
-            LogSession::Running(_) => "ログ中",
-            LogSession::Paused(_) => "ログ停止",
-            LogSession::Failed { message, .. } => message.as_str(),
-        };
-        let zoom = if self.layout.zoomed() && self.layout.focus() == id { " ズーム" } else { "" };
-        let resize = if self.resize { " リサイズ" } else { "" };
-        let note = pane.session.note();
-        let flow = if params.flow == Flow::RtsCts { " CTS送信" } else { "" };
-        format!(
-            "{port}  {data}{parity}{stop} {baud} {link}{flow}  {log}  {note}{zoom}{resize}",
-            data = data_label(params.data_bits),
-            parity = parity_label(params.parity),
-            stop = stop_label(params.stop_bits),
-            baud = params.baud_rate,
-        )
+        let message = session
+            .and_then(|session| session.note())
+            .map(|message| (message.severity, message.text.clone()));
+        status::Facts {
+            focused_badge: (focused && self.resize).then_some("RESIZE"),
+            name: String::new(),
+            link,
+            frame,
+            flow: params.as_ref().map(|params| params.flow).unwrap_or(Flow::None),
+            encoding,
+            local_echo: session.is_some_and(|session| session.local_echo()),
+            newline: None,
+            dtr: params.as_ref().is_some_and(|params| params.dtr_on_open == Some(true)),
+            log: session
+                .map(|session| status::LogView::from_session(session.log_state()))
+                .unwrap_or(status::LogView::Off),
+            message,
+        }
     }
 }
 
+/// The 24 px status line at the bottom of a pane (design §1.3, §3).
+fn status_bar(facts: &status::Facts, focused: bool) -> impl IntoElement {
+    let fields = status::build(facts);
+    let width = 1000.0_f32;
+    let fields = status::fit(
+        fields,
+        width,
+        160.0,
+        |text| text.chars().count() as f32 * 7.0,
+        facts.message.as_ref().map_or(0.0, |(_, text)| text.chars().count() as f32 * 7.0),
+    );
+    let mut row = div()
+        .h(px(24.0))
+        .w_full()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(14.0))
+        .px(px(10.0))
+        .overflow_hidden()
+        .text_size(px(12.0))
+        .bg(gpui::rgb(0x2a2c33))
+        .border_t_1()
+        .border_color(gpui::rgb(0x3b3d45))
+        .text_color(gpui::rgb(0xaeb2bb));
+    if focused {
+        row = row.border_color(gpui::rgb(0x3b3d45));
+    }
+    for field in fields {
+        row = row.child(div().flex_none().text_color(tone_color(field.tone)).child(field.text));
+    }
+    if let Some((severity, text)) = &facts.message {
+        let (line, tone) = status::message_text(*severity, text);
+        row = row.child(div().flex_1().min_w(px(160.0)).overflow_hidden().text_color(tone_color(tone)).child(line));
+    }
+    row
+}
+
+fn tone_color(tone: status::Tone) -> gpui::Rgba {
+    gpui::rgb(match tone {
+        status::Tone::Normal => 0xaeb2bb,
+        status::Tone::Green => 0x57c25a,
+        status::Tone::Yellow => 0xe5c07b,
+        status::Tone::Gray => 0x777777,
+        status::Tone::Red => 0xe06c75,
+        status::Tone::Accent => 0x4a8cff,
+    })
+}
+
 pub fn open(cx: &mut App) {
-    if let Err(error) = gpui_kit::open_window(gpui::WindowOptions::default(), cx, |window, cx| {
+    // Design screen §1.1: 1200 × 708 client area (the 740 window less the
+    // caption), minimum 640 × 400. The frame adds the caption height.
+    let options = gpui::WindowOptions {
+        window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::centered(
+            None,
+            gpui::size(px(1200.0), px(740.0)),
+            cx,
+        ))),
+        window_min_size: Some(gpui::size(px(640.0), px(400.0))),
+        ..Default::default()
+    };
+    if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| Workspace::new(window, cx))
     }) {
         eprintln!("rs-term: {error}");
@@ -1342,29 +1419,8 @@ fn to_rgba(color: rs_term_core::Rgb) -> gpui::Rgba {
     gpui::rgb(u32::from_be_bytes([0, color.r, color.g, color.b]))
 }
 
-fn data_label(bits: DataBits) -> &'static str {
-    match bits {
-        DataBits::Five => "5",
-        DataBits::Six => "6",
-        DataBits::Seven => "7",
-        DataBits::Eight => "8",
-    }
-}
 
-fn parity_label(parity: Parity) -> &'static str {
-    match parity {
-        Parity::None => "N",
-        Parity::Odd => "O",
-        Parity::Even => "E",
-    }
-}
 
-fn stop_label(stop: StopBits) -> &'static str {
-    match stop {
-        StopBits::One => "1",
-        StopBits::Two => "2",
-    }
-}
 
 fn action_by_id(id: &str) -> Option<Box<dyn gpui::Action>> {
     let action: Box<dyn gpui::Action> = match id {

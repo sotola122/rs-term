@@ -231,6 +231,47 @@ impl PendingOpen {
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
+/// How a status-line message is drawn (design §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// Plain text.
+    Info,
+    /// Yellow.
+    Warn,
+    /// Red. Stays until the next message or until its cause is resolved.
+    Error,
+}
+
+/// One message for the status line of a pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub severity: Severity,
+    pub text: String,
+}
+
+impl Message {
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Error,
+            text: text.into(),
+        }
+    }
+
+    pub fn warn(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warn,
+            text: text.into(),
+        }
+    }
+
+    pub fn info(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Info,
+            text: text.into(),
+        }
+    }
+}
+
 pub struct Session {
     screen: Screen,
     encoding: SessionEncoding,
@@ -244,7 +285,7 @@ pub struct Session {
     applied: Option<SerialParams>,
     generation: Arc<AtomicU64>,
     log: LogEngine,
-    note: String,
+    note: Option<Message>,
     pins: Option<PinState>,
     usb: Option<UsbIdentity>,
     reconnect: bool,
@@ -272,7 +313,7 @@ impl Session {
             applied: None,
             generation: Arc::new(AtomicU64::new(1)),
             log: LogEngine::default(),
-            note: String::new(),
+            note: None,
             pins: None,
             usb: None,
             reconnect: false,
@@ -333,13 +374,16 @@ impl Session {
                     params: opened.params,
                 };
                 self.pins = None;
-                self.note.clear();
+                self.note = None;
                 Ok(EventRx::new(channels))
             }
             Err(error) => {
                 self.link = Link::Disconnected;
                 let error = OpenError::Port(error);
-                self.note = format!("{} を開けない: {error}", opened.params.path);
+                self.note = Some(Message::error(format!(
+                    "{} を開けない: {error}",
+                    opened.params.path
+                )));
                 Err(error)
             }
         }
@@ -376,7 +420,7 @@ impl Session {
         let _ = self.log.command(LogCommand::Stop);
         self.params.path.clear();
         self.usb = None;
-        self.note.clear();
+        self.note = None;
     }
 
     pub fn close(&mut self) {
@@ -403,16 +447,21 @@ impl Session {
         self.local_echo
     }
 
-    pub fn note(&self) -> &str {
-        &self.note
+    pub fn note(&self) -> Option<&Message> {
+        self.note.as_ref()
     }
 
     pub fn clear_note(&mut self) {
-        self.note.clear();
+        self.note = None;
+    }
+
+    /// Replace the status-line message with a typed one.
+    pub fn set_message(&mut self, message: Message) {
+        self.note = Some(message);
     }
 
     pub fn set_note(&mut self, note: impl Into<String>) {
-        self.note = note.into();
+        self.note = Some(Message::error(note));
     }
 
     /// Periodic work, about once a second: flush a quiet log and reap port
@@ -427,9 +476,9 @@ impl Session {
             } else {
                 if now.duration_since(since) >= SHUTDOWN_WAIT && !self.reap_warned {
                     self.reap_warned = true;
-                    self.note =
-                        "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）"
-                            .into();
+                    self.note = Some(Message::error(
+                        "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）",
+                    ));
                 }
                 still.push((handle, since));
             }
@@ -473,11 +522,11 @@ impl Session {
         let outcome = self.screen.apply_bytes(bytes);
         self.log.record_text(&outcome.text);
         for note in outcome.notes {
-            self.note = note;
+            self.note = Some(Message::error(note));
         }
         for reply in outcome.replies {
             if let Err(error) = self.queue_bytes(reply) {
-                self.note = error.to_string();
+                self.note = Some(Message::error(error.to_string()));
             }
         }
     }
@@ -525,12 +574,12 @@ impl Session {
                 params: params.clone(),
                 error: error.clone(),
             };
-            self.note = error.to_string();
+            self.note = Some(Message::error(error.to_string()));
         }
     }
 
     pub fn note_command_failed(&mut self, error: PortError) {
-        self.note = error.to_string();
+        self.note = Some(Message::error(error.to_string()));
     }
 
     /// The port refused new parameters. Show the reason and go back to the
@@ -545,7 +594,7 @@ impl Session {
                 };
             }
         }
-        self.note = format!("設定を戻した: {error}");
+        self.note = Some(Message::error(format!("設定を戻した: {error}")));
     }
 
     /// Route one event from `EventRx`.
@@ -568,7 +617,9 @@ impl Session {
     }
 
     pub fn note_dropped(&mut self, bytes: u64) {
-        self.note = format!("受信が速すぎて計 {bytes} バイトを捨てた");
+        self.note = Some(Message::warn(format!(
+            "受信が速すぎて計 {bytes} バイトを捨てた"
+        )));
     }
 
     /// Stop the port thread and keep `Link::Lost`. `disconnect` is the
@@ -591,7 +642,7 @@ impl Session {
         self.encoding = encoding;
         self.log.record_text(&outcome.text);
         for note in outcome.notes {
-            self.note = note;
+            self.note = Some(Message::error(note));
         }
     }
 
@@ -1072,7 +1123,13 @@ mod tests {
         };
         assert!(matches!(error, OpenError::Port(_)));
         assert!(matches!(session.link(), Link::Disconnected));
-        assert!(session.note().contains("を開けない"), "{}", session.note());
+        assert!(
+            session
+                .note()
+                .is_some_and(|note| note.text.contains("を開けない")),
+            "{:?}",
+            session.note()
+        );
     }
 
     #[test]
@@ -1399,8 +1456,10 @@ mod tests {
         }
         assert_eq!(session.params().baud_rate, 115_200);
         assert!(
-            session.note().contains("設定を戻した"),
-            "{}",
+            session
+                .note()
+                .is_some_and(|note| note.text.contains("設定を戻した")),
+            "{:?}",
             session.note()
         );
     }

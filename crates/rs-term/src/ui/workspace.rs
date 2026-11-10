@@ -25,14 +25,15 @@ use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable, 
 use rs_term_core::{
     expand_log_name, palette_by_name, port_token, save_settings_file, validate_log_name,
     windows_log_dir, DataBits, EventRx, Flow, Input, IoEvent, KeyInput, Link, LogCommand,
-    LogEncoding, LogSession, LogTarget, Parity, PortInfo, ReceiveNewline, Rotate, ScreenConfig,
-    SerialParams, Session, SessionConfig, SessionEncoding, Settings, StopBits, Timestamp,
-    TransmitNewline, UsbIdentity,
+    LogEncoding, LogTarget, Parity, PortInfo, ReceiveNewline, Rotate, ScreenConfig, SerialParams,
+    Session, SessionConfig, SessionEncoding, Settings, StopBits, Timestamp, TransmitNewline,
+    UsbIdentity,
 };
 
 use super::actions;
 use super::color::{self, resolve};
 use super::layout::{Axis, Direction, Layout, Rect, ViewNode};
+use super::status;
 
 const BAUD_RATES: &[u32] = &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 const AREA: Rect = Rect {
@@ -152,7 +153,7 @@ impl Workspace {
         for warning in &settings.warnings {
             status = format!("{status} {warning}");
         }
-        status = format!("{status} {}", load_keymap(cx));
+        status = format!("{status} {}", load_keymap(cx)).trim().to_string();
         let mut workspace = Self {
             draft: Draft {
                 path: String::new(),
@@ -201,7 +202,19 @@ impl Workspace {
     fn set_status(&mut self, text: impl Into<String>) {
         let text = text.into();
         if let Some(session) = self.focused_session() {
-            session.set_note(text);
+            if text.is_empty() {
+                session.clear_note();
+            } else {
+                session.set_note(text);
+            }
+        }
+    }
+
+    /// An information message (plain text, not an error).
+    fn set_info(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if let Some(session) = self.focused_session() {
+            session.set_message(rs_term_core::Message::info(text));
         }
     }
 
@@ -360,7 +373,10 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::About, _, cx| {
-                this.set_status(format!("rs-term {}", env!("CARGO_PKG_VERSION")));
+                this.set_info(format!(
+                    "rs-term {} — Copyright 2026 sotola122 — Apache-2.0",
+                    env!("CARGO_PKG_VERSION")
+                ));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &actions::Connect, _, cx| {

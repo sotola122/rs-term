@@ -36,6 +36,6 @@ pub use serial::{
     SerialParams, StopBits, UsbIdentity, READ_TIMEOUT,
 };
 pub use session::{
-    Direction, EventRx, Input, IoEvent, KeyInput, Link, OpenedPort, PendingOpen, ScreenConfig,
-    Session, SessionConfig,
+    Direction, EventRx, Input, IoEvent, KeyInput, Link, Message, OpenedPort, PendingOpen,
+    ScreenConfig, Session, SessionConfig, Severity,
 };
