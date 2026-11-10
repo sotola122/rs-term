@@ -222,7 +222,9 @@ impl Layout {
                 };
                 edges
                     .iter()
-                    .filter(|split| split.axis == axis && edge_matches(split, focused.rect, opposite))
+                    .filter(|split| {
+                        split.axis == axis && edge_matches(split, focused.rect, opposite)
+                    })
                     .min_by_key(|split| edge_distance(split, focused.rect, opposite))
             });
         let Some(split) = split else {
@@ -377,7 +379,10 @@ fn collect(node: &Node, ids: &mut Vec<u64>) {
 
 fn place(node: &Node, area: Rect, out: &mut Vec<PaneRect>) {
     match node {
-        Node::Leaf(id) => out.push(PaneRect { id: *id, rect: area }),
+        Node::Leaf(id) => out.push(PaneRect {
+            id: *id,
+            rect: area,
+        }),
         Node::Split {
             axis,
             ratio,
@@ -398,7 +403,10 @@ fn split_rect(area: Rect, axis: Axis, ratio: f32) -> (Rect, Rect) {
             let first = first.clamp(1, area.width.saturating_sub(1).max(1));
             let second = area.width.saturating_sub(first);
             (
-                Rect { width: first, ..area },
+                Rect {
+                    width: first,
+                    ..area
+                },
                 Rect {
                     x: area.x + first,
                     width: second,
@@ -411,7 +419,10 @@ fn split_rect(area: Rect, axis: Axis, ratio: f32) -> (Rect, Rect) {
             let first = first.clamp(1, area.height.saturating_sub(1).max(1));
             let second = area.height.saturating_sub(first);
             (
-                Rect { height: first, ..area },
+                Rect {
+                    height: first,
+                    ..area
+                },
                 Rect {
                     y: area.y + first,
                     height: second,
@@ -478,10 +489,10 @@ fn nearest(focused: PaneRect, direction: Direction, panes: &[PaneRect]) -> Optio
         .filter(|(_, pane)| {
             let r = pane.rect;
             match direction {
-                Direction::Left => {
-                    r.x + r.width <= fr.x && overlap(r.y, r.height, fr.y, fr.height)
+                Direction::Left => r.x + r.width <= fr.x && overlap(r.y, r.height, fr.y, fr.height),
+                Direction::Right => {
+                    r.x >= fr.x + fr.width && overlap(r.y, r.height, fr.y, fr.height)
                 }
-                Direction::Right => r.x >= fr.x + fr.width && overlap(r.y, r.height, fr.y, fr.height),
                 Direction::Up => r.y + r.height <= fr.y && overlap(r.x, r.width, fr.x, fr.width),
                 Direction::Down => r.y >= fr.y + fr.height && overlap(r.x, r.width, fr.x, fr.width),
             }
@@ -495,11 +506,15 @@ fn nearest(focused: PaneRect, direction: Direction, panes: &[PaneRect]) -> Optio
                 Direction::Down => r.y.saturating_sub(fr.y + fr.height),
             };
             let overlap = match direction {
-                Direction::Left | Direction::Right => overlap_amount(r.y, r.height, fr.y, fr.height),
+                Direction::Left | Direction::Right => {
+                    overlap_amount(r.y, r.height, fr.y, fr.height)
+                }
                 Direction::Up | Direction::Down => overlap_amount(r.x, r.width, fr.x, fr.width),
             };
             let center = match direction {
-                Direction::Left | Direction::Right => center_distance(r.y, r.height, fr.y, fr.height),
+                Direction::Left | Direction::Right => {
+                    center_distance(r.y, r.height, fr.y, fr.height)
+                }
                 Direction::Up | Direction::Down => center_distance(r.x, r.width, fr.x, fr.width),
             };
             (edge, Reverse(overlap), center, *index)
@@ -567,7 +582,9 @@ fn walk_splits(node: &Node, path: Vec<bool>, area: Rect, out: &mut Vec<SplitEdge
 
 fn edge_matches(split: &SplitEdge, focused: Rect, direction: Direction) -> bool {
     let overlaps = match direction {
-        Direction::Left | Direction::Right => overlap(split.y, split.height, focused.y, focused.height),
+        Direction::Left | Direction::Right => {
+            overlap(split.y, split.height, focused.y, focused.height)
+        }
         Direction::Up | Direction::Down => overlap(split.x, split.width, focused.x, focused.width),
     };
     overlaps && edge_distance(split, focused, direction) <= 1
@@ -584,7 +601,12 @@ fn edge_distance(split: &SplitEdge, focused: Rect, direction: Direction) -> u32 
 
 fn ratio_at(node: &Node, path: &[bool]) -> Option<f32> {
     match node {
-        Node::Split { ratio, first, second, .. } => {
+        Node::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } => {
             if path.is_empty() {
                 Some(*ratio)
             } else if path[0] {
@@ -599,7 +621,12 @@ fn ratio_at(node: &Node, path: &[bool]) -> Option<f32> {
 
 fn set_ratio(node: &mut Node, path: &[bool], ratio: f32) -> bool {
     match node {
-        Node::Split { ratio: slot, first, second, .. } => {
+        Node::Split {
+            ratio: slot,
+            first,
+            second,
+            ..
+        } => {
             if path.is_empty() {
                 *slot = ratio;
                 true
@@ -618,7 +645,12 @@ mod tests {
     use super::*;
 
     fn area() -> Rect {
-        Rect { x: 0, y: 0, width: 1000, height: 800 }
+        Rect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 800,
+        }
     }
 
     #[test]

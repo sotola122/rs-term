@@ -165,12 +165,7 @@ pub(crate) trait PortIo: Send {
         let mut written = 0;
         while written < buf.len() {
             match self.write(&buf[written..])? {
-                0 => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "write returned 0",
-                    ))
-                }
+                0 => return Err(io::Error::new(io::ErrorKind::WriteZero, "write returned 0")),
                 count => written += count,
             }
         }
@@ -366,39 +361,39 @@ fn worker_loop(
     let mut pending: Vec<u8> = Vec::new();
     let mut pending_at = 0usize;
     let mut break_until: Option<Instant> = None;
-        let mut lost = false;
-        let mut last_pins: Option<PinState> = None;
-        let mut dropped = 0u64;
-        loop {
-            let mut read_was_idle = false;
-            if !lost {
-                match port.read(&mut buffer) {
-                    Ok(0) => read_was_idle = true,
-                    Ok(count) => {
-                        let chunk = buffer[..count.min(MAX_CHUNK)].to_vec();
-                        send_data(&mut data_tx, IoEvent::Data(chunk), &mut dropped);
-                    }
-                    Err(error)
-                        if error.kind() == io::ErrorKind::TimedOut
-                            || error.kind() == io::ErrorKind::Interrupted =>
-                    {
-                        read_was_idle = true;
-                    }
-                    Err(error) => {
-                        send_data(
-                            &mut data_tx,
-                            IoEvent::PortLost(PortError::Io {
-                                message: error.to_string(),
-                            }),
-                            &mut dropped,
-                        );
-                        lost = true;
-                        read_was_idle = true;
-                    }
+    let mut lost = false;
+    let mut last_pins: Option<PinState> = None;
+    let mut dropped = 0u64;
+    loop {
+        let mut read_was_idle = false;
+        if !lost {
+            match port.read(&mut buffer) {
+                Ok(0) => read_was_idle = true,
+                Ok(count) => {
+                    let chunk = buffer[..count.min(MAX_CHUNK)].to_vec();
+                    send_data(&mut data_tx, IoEvent::Data(chunk), &mut dropped);
                 }
-            } else {
-                read_was_idle = true;
+                Err(error)
+                    if error.kind() == io::ErrorKind::TimedOut
+                        || error.kind() == io::ErrorKind::Interrupted =>
+                {
+                    read_was_idle = true;
+                }
+                Err(error) => {
+                    send_data(
+                        &mut data_tx,
+                        IoEvent::PortLost(PortError::Io {
+                            message: error.to_string(),
+                        }),
+                        &mut dropped,
+                    );
+                    lost = true;
+                    read_was_idle = true;
+                }
             }
+        } else {
+            read_was_idle = true;
+        }
 
         let mut saw_command = false;
         for _ in 0..8 {
@@ -426,22 +421,38 @@ fn worker_loop(
                         }
                         Command::Apply(params) => {
                             if let Err(error) = port.apply(&params) {
-                                send_data(&mut data_tx, IoEvent::CommandFailed(error), &mut dropped);
+                                send_data(
+                                    &mut data_tx,
+                                    IoEvent::CommandFailed(error),
+                                    &mut dropped,
+                                );
                             }
                         }
                         Command::Dtr(on) => {
                             if let Err(error) = port.set_dtr(on) {
-                                send_data(&mut data_tx, IoEvent::CommandFailed(error), &mut dropped);
+                                send_data(
+                                    &mut data_tx,
+                                    IoEvent::CommandFailed(error),
+                                    &mut dropped,
+                                );
                             }
                         }
                         Command::Rts(on) => {
                             if let Err(error) = port.set_rts(on) {
-                                send_data(&mut data_tx, IoEvent::CommandFailed(error), &mut dropped);
+                                send_data(
+                                    &mut data_tx,
+                                    IoEvent::CommandFailed(error),
+                                    &mut dropped,
+                                );
                             }
                         }
                         Command::Break { hold } => {
                             if let Err(error) = port.set_break(true) {
-                                send_data(&mut data_tx, IoEvent::CommandFailed(error), &mut dropped);
+                                send_data(
+                                    &mut data_tx,
+                                    IoEvent::CommandFailed(error),
+                                    &mut dropped,
+                                );
                             } else {
                                 break_until = Some(Instant::now() + hold);
                             }

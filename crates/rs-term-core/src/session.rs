@@ -83,9 +83,16 @@ pub struct ScreenConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Link {
     Disconnected,
-    Opening { params: SerialParams },
-    Open { params: SerialParams },
-    Lost { params: SerialParams, error: PortError },
+    Opening {
+        params: SerialParams,
+    },
+    Open {
+        params: SerialParams,
+    },
+    Lost {
+        params: SerialParams,
+        error: PortError,
+    },
 }
 
 pub struct EventRx {
@@ -246,7 +253,9 @@ impl Session {
     /// all match. The UI does not expose the setting.
     pub fn reconnect_matches(&self, current: Option<&UsbIdentity>) -> bool {
         match (self.reconnect, self.usb.as_ref(), current) {
-            (true, Some(previous), Some(current)) => serial::usb_identity_matches(previous, current),
+            (true, Some(previous), Some(current)) => {
+                serial::usb_identity_matches(previous, current)
+            }
             _ => false,
         }
     }
@@ -447,13 +456,17 @@ impl Session {
         for piece in codec::split_paste(text) {
             match piece {
                 PastePiece::Text(part) => {
-                    let bytes = codec::encode(self.encoding, &part).map_err(|ch| SessionError::Unmappable { ch })?;
+                    let bytes = codec::encode(self.encoding, &part)
+                        .map_err(|ch| SessionError::Unmappable { ch })?;
                     echo.push(Echo::Text(part));
                     push_chunks(&mut chunks, bytes);
                 }
                 PastePiece::Newline => {
                     echo.push(Echo::Newline);
-                    push_chunks(&mut chunks, codec::transmit_newline(self.newline.transmit).to_vec());
+                    push_chunks(
+                        &mut chunks,
+                        codec::transmit_newline(self.newline.transmit).to_vec(),
+                    );
                 }
             }
         }
@@ -501,7 +514,10 @@ impl Session {
         let Some(worker) = self.worker.as_ref() else {
             return Err(SessionError::NotOpen);
         };
-        worker.commands.try_send(command).map_err(|_| SessionError::Busy)
+        worker
+            .commands
+            .try_send(command)
+            .map_err(|_| SessionError::Busy)
     }
 
     fn shutdown_worker(&mut self) {
@@ -742,7 +758,13 @@ mod tests {
         });
         let mut session = session();
         let mut rx = session
-            .connect_with(SerialParams { path: "COM3".into(), ..SerialParams::default() }, open)
+            .connect_with(
+                SerialParams {
+                    path: "COM3".into(),
+                    ..SerialParams::default()
+                },
+                open,
+            )
             .unwrap();
         let event = wait_data(&mut rx);
         assert!(matches!(event, Some(IoEvent::Data(bytes)) if bytes == b"hi"));
@@ -762,9 +784,7 @@ mod tests {
             ..empty_state()
         });
         let mut session = session();
-        let mut rx = session
-            .connect_with(SerialParams::default(), open)
-            .unwrap();
+        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
         let event = wait_event(&mut rx);
         match event {
             Some(IoEvent::PortLost(error)) => session.note_port_lost(error),
@@ -829,9 +849,15 @@ mod tests {
             ..SerialParams::default()
         };
         let _rx = session.connect_with(params, open).unwrap();
-        assert_eq!(lock(&state).opened_with.as_ref().unwrap().dtr_on_open, Some(true));
+        assert_eq!(
+            lock(&state).opened_with.as_ref().unwrap().dtr_on_open,
+            Some(true)
+        );
         let error = session.set_rts(false).unwrap_err();
-        assert!(matches!(error, SessionError::Port(PortError::Unsupported(_))));
+        assert!(matches!(
+            error,
+            SessionError::Port(PortError::Unsupported(_))
+        ));
         assert!(lock(&state).rts.is_empty());
     }
 
@@ -859,7 +885,9 @@ mod tests {
         let mut session = session();
         let _rx = session.connect_with(SerialParams::default(), open).unwrap();
         session
-            .apply_input(Input::Break { hold: Duration::from_millis(30) })
+            .apply_input(Input::Break {
+                hold: Duration::from_millis(30),
+            })
             .unwrap();
         let deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < deadline {
@@ -879,22 +907,36 @@ mod tests {
         let (state, open) = open_shared(empty_state());
         let mut session = session();
         let _rx = session.connect_with(SerialParams::default(), open).unwrap();
-        session.apply_input(Input::Key(KeyInput::Ctrl('c'))).unwrap();
-        session.apply_input(Input::Key(KeyInput::Ctrl('D'))).unwrap();
-        session.apply_input(Input::Key(KeyInput::Ctrl('z'))).unwrap();
-        session.apply_input(Input::Key(KeyInput::Backspace)).unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Ctrl('c')))
+            .unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Ctrl('D')))
+            .unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Ctrl('z')))
+            .unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Backspace))
+            .unwrap();
         session.apply_input(Input::Key(KeyInput::Delete)).unwrap();
         session.apply_input(Input::Key(KeyInput::Home)).unwrap();
         session.apply_input(Input::Key(KeyInput::End)).unwrap();
-        session.apply_input(Input::Key(KeyInput::Function(1))).unwrap();
-        session.apply_input(Input::Key(KeyInput::Arrow(Direction::Up))).unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Function(1)))
+            .unwrap();
+        session
+            .apply_input(Input::Key(KeyInput::Arrow(Direction::Up)))
+            .unwrap();
         let written = wait_written(&state, 20);
         assert!(written.windows(1).any(|w| w == [0x03]));
         assert!(written.windows(1).any(|w| w == [0x04]));
         assert!(written.windows(1).any(|w| w == [0x1A]));
         assert!(written.windows(1).any(|w| w == [0x08]));
         assert!(written.windows(4).any(|w| w == *b"\x1b[3~"));
-        assert!(written.windows(3).any(|w| w == *b"\x1b[H" || w == *b"\x1b[F"));
+        assert!(written
+            .windows(3)
+            .any(|w| w == *b"\x1b[H" || w == *b"\x1b[F"));
         assert!(written.windows(3).any(|w| w == *b"\x1bOP"));
         assert!(written.windows(3).any(|w| w == *b"\x1b[A"));
     }
@@ -930,7 +972,10 @@ mod tests {
             .log(LogCommand::Start(LogTarget::Text {
                 path: path.clone(),
                 append: false,
-                rotate: Rotate { max_bytes: 64 * 1024, keep: 2 },
+                rotate: Rotate {
+                    max_bytes: 64 * 1024,
+                    keep: 2,
+                },
                 encoding: LogEncoding::Utf8,
                 plain: true,
                 bom: false,
@@ -962,7 +1007,12 @@ mod tests {
             break_count: 0,
             clear_count: 0,
             opened_with: None,
-            pins: PinState { cts: false, dsr: false, cd: false, ri: false },
+            pins: PinState {
+                cts: false,
+                dsr: false,
+                cd: false,
+                ri: false,
+            },
             fail_rts: false,
         }
     }

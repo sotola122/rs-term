@@ -22,9 +22,7 @@ pub use log::{
     expand_log_name, port_token, validate_log_name, LogCommand, LogEncoding, LogSession, LogTarget,
     Rotate, Timestamp,
 };
-pub use screen::{
-    AnsiName, CellColor, CellFlags, Rgb, ScreenCell, ScreenCursor, ScreenSnapshot,
-};
+pub use screen::{AnsiName, CellColor, CellFlags, Rgb, ScreenCell, ScreenCursor, ScreenSnapshot};
 pub use serial::{
     list_ports, usb_identity_matches, DataBits, Flow, Parity, PinState, PortInfo, PortKind,
     SerialParams, StopBits, UsbIdentity, READ_TIMEOUT,

@@ -84,22 +84,86 @@ pub fn light_palette() -> TerminalPalette {
 }
 
 const ANSI_16: [Rgb; 16] = [
-    Rgb { r: 0x00, g: 0x00, b: 0x00 },
-    Rgb { r: 0xCD, g: 0x00, b: 0x00 },
-    Rgb { r: 0x00, g: 0xCD, b: 0x00 },
-    Rgb { r: 0xCD, g: 0xCD, b: 0x00 },
-    Rgb { r: 0x00, g: 0x00, b: 0xEE },
-    Rgb { r: 0xCD, g: 0x00, b: 0xCD },
-    Rgb { r: 0x00, g: 0xCD, b: 0xCD },
-    Rgb { r: 0xE5, g: 0xE5, b: 0xE5 },
-    Rgb { r: 0x7F, g: 0x7F, b: 0x7F },
-    Rgb { r: 0xFF, g: 0x00, b: 0x00 },
-    Rgb { r: 0x00, g: 0xFF, b: 0x00 },
-    Rgb { r: 0xFF, g: 0xFF, b: 0x00 },
-    Rgb { r: 0x5C, g: 0x5C, b: 0xFF },
-    Rgb { r: 0xFF, g: 0x00, b: 0xFF },
-    Rgb { r: 0x00, g: 0xFF, b: 0xFF },
-    Rgb { r: 0xFF, g: 0xFF, b: 0xFF },
+    Rgb {
+        r: 0x00,
+        g: 0x00,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0xCD,
+        g: 0x00,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0x00,
+        g: 0xCD,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0xCD,
+        g: 0xCD,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0x00,
+        g: 0x00,
+        b: 0xEE,
+    },
+    Rgb {
+        r: 0xCD,
+        g: 0x00,
+        b: 0xCD,
+    },
+    Rgb {
+        r: 0x00,
+        g: 0xCD,
+        b: 0xCD,
+    },
+    Rgb {
+        r: 0xE5,
+        g: 0xE5,
+        b: 0xE5,
+    },
+    Rgb {
+        r: 0x7F,
+        g: 0x7F,
+        b: 0x7F,
+    },
+    Rgb {
+        r: 0xFF,
+        g: 0x00,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0x00,
+        g: 0xFF,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0xFF,
+        g: 0xFF,
+        b: 0x00,
+    },
+    Rgb {
+        r: 0x5C,
+        g: 0x5C,
+        b: 0xFF,
+    },
+    Rgb {
+        r: 0xFF,
+        g: 0x00,
+        b: 0xFF,
+    },
+    Rgb {
+        r: 0x00,
+        g: 0xFF,
+        b: 0xFF,
+    },
+    Rgb {
+        r: 0xFF,
+        g: 0xFF,
+        b: 0xFF,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,7 +226,9 @@ pub struct LayoutSettings {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LayoutNode {
-    Leaf { id: u64 },
+    Leaf {
+        id: u64,
+    },
     Split {
         axis: Axis,
         ratio_millis: u16,
@@ -367,7 +433,9 @@ fn default_raw_tree() -> RawNode {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum RawNode {
-    Leaf { id: u64 },
+    Leaf {
+        id: u64,
+    },
     Split {
         axis: String,
         ratio_millis: u16,
@@ -466,7 +534,9 @@ struct SavedLayout {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SavedNode {
-    Leaf { id: u64 },
+    Leaf {
+        id: u64,
+    },
     Split {
         axis: &'static str,
         ratio_millis: u16,
@@ -530,7 +600,8 @@ pub fn save_settings_file(path: &Path, settings: &Settings) -> Result<(), String
     let tmp = tmp_path(path);
     let body = toml::to_string_pretty(&saved(settings)).map_err(|error| error.to_string())?;
     let mut file = File::create(&tmp).map_err(|error| error.to_string())?;
-    file.write_all(body.as_bytes()).map_err(|error| error.to_string())?;
+    file.write_all(body.as_bytes())
+        .map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     drop(file);
     fs::rename(&tmp, path).map_err(|error| {
@@ -555,11 +626,15 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     if raw.terminal.scrollback > 100_000 {
         return Err("scrollback が範囲外".into());
     }
-    if raw.terminal.columns == 0 || raw.terminal.rows == 0 || raw.terminal.columns > 500 || raw.terminal.rows > 500
+    if raw.terminal.columns == 0
+        || raw.terminal.rows == 0
+        || raw.terminal.columns > 500
+        || raw.terminal.rows > 500
     {
         return Err("columns または rows が範囲外".into());
     }
-    if !(1.0..=72.0).contains(&raw.terminal.font_size_px) || !(1.0..=72.0).contains(&raw.ui.font_size_px)
+    if !(1.0..=72.0).contains(&raw.terminal.font_size_px)
+        || !(1.0..=72.0).contains(&raw.ui.font_size_px)
     {
         return Err("font_size_px が範囲外".into());
     }
@@ -575,7 +650,9 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     let mut warnings = Vec::new();
     let mut palette = raw.terminal.palette;
     if palette_by_name(&palette).is_none() {
-        warnings.push(format!("terminal.palette `{palette}` は未知なので classic-dark"));
+        warnings.push(format!(
+            "terminal.palette `{palette}` は未知なので classic-dark"
+        ));
         palette = "classic-dark".into();
     }
     let mut theme_mode = raw.ui.theme_mode;
@@ -754,7 +831,11 @@ fn saved(settings: &Settings) -> SavedSettings {
                     parity: parity_name(pane.parity),
                     stop_bits: stop_name(pane.stop_bits),
                     flow: flow_name(pane.flow),
-                    dtr: if pane.dtr_on_open == Some(true) { "on" } else { "off" },
+                    dtr: if pane.dtr_on_open == Some(true) {
+                        "on"
+                    } else {
+                        "off"
+                    },
                     rts: pane.rts,
                     encoding: encoding_name(pane.encoding),
                     receive: receive_name(pane.newline.receive),
@@ -1005,6 +1086,8 @@ text_encoding = "utf-8"
         assert!(windows_settings_path(Some("")).is_none());
         assert!(windows_log_dir(Some("")).is_none());
         let path = windows_settings_path(Some("C:\\Users\\a\\AppData\\Roaming")).unwrap();
-        assert!(path.ends_with("rs-term/settings.toml") || path.ends_with("rs-term\\settings.toml"));
+        assert!(
+            path.ends_with("rs-term/settings.toml") || path.ends_with("rs-term\\settings.toml")
+        );
     }
 }

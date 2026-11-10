@@ -1,0 +1,30 @@
+name: Package release
+description: Release-build rs-term and stage the binary with the license files.
+
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+  dest:
+    description: Directory that receives the binary and license files
+    required: false
+    default: dist
+
+runs:
+  using: composite
+  steps:
+    - name: Build and stage
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        DEST: ${{ inputs.dest }}
+      run: |
+        set -euo pipefail
+        cargo build --locked --release -p rs-term --target "$TARGET"
+        mkdir -p "$DEST"
+        if [[ "$TARGET" == *windows* ]]; then
+          cp "target/${TARGET}/release/rs-term.exe" "$DEST/rs-term.exe"
+        else
+          cp "target/${TARGET}/release/rs-term" "$DEST/rs-term"
+        fi
+        cp LICENSE NOTICE "$DEST/"

@@ -12,24 +12,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Local;
-use gpui::{
-    AnyElement, App, AppContext, Bounds, ClipboardItem, ContentMask, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, FontFallbacks, FontFeatures, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Pixels, Point, Render, ScrollDelta, ScrollEvent,
-    SharedString, Styled, Task, TextAlign, TextRun, WeakEntity, Window, canvas, div, fill, font,
-    px, size,
-};
 use gpui::prelude::FluentBuilder;
+use gpui::{
+    canvas, div, fill, font, px, size, AnyElement, App, AppContext, Bounds, ClipboardItem,
+    ContentMask, Context, Entity, EventEmitter, FocusHandle, Focusable, FontFallbacks,
+    FontFeatures, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollEvent,
+    SharedString, Styled, Task, TextAlign, TextRun, WeakEntity, Window,
+};
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
-use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel, v_resizable};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable, ResizableState};
 use rs_term_core::{
-    DataBits, EventRx, Flow, Input, IoEvent, KeyInput, LayoutNode, Link, LogCommand, LogEncoding,
-    LogSession, LogTarget, PaneSettings, Parity, PortInfo, ReceiveNewline,
-    Rotate, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding, Settings,
-    StopBits, Timestamp, TransmitNewline, UsbIdentity, expand_log_name, palette_by_name,
-    port_token, save_settings_file, validate_log_name,
-    windows_log_dir, Axis as SettingsAxis,
+    expand_log_name, palette_by_name, port_token, save_settings_file, validate_log_name,
+    windows_log_dir, Axis as SettingsAxis, DataBits, EventRx, Flow, Input, IoEvent, KeyInput,
+    LayoutNode, Link, LogCommand, LogEncoding, LogSession, LogTarget, PaneSettings, Parity,
+    PortInfo, ReceiveNewline, Rotate, ScreenConfig, SerialParams, Session, SessionConfig,
+    SessionEncoding, Settings, StopBits, Timestamp, TransmitNewline, UsbIdentity,
 };
 
 use super::actions;
@@ -37,7 +35,12 @@ use super::color::{self, resolve};
 use super::layout::{Axis, Direction, Layout, Rect, ViewNode};
 
 const BAUD_RATES: &[u32] = &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
-const AREA: Rect = Rect { x: 0, y: 0, width: 1000, height: 800 };
+const AREA: Rect = Rect {
+    x: 0,
+    y: 0,
+    width: 1000,
+    height: 800,
+};
 
 pub struct Workspace {
     settings: Settings,
@@ -96,10 +99,22 @@ enum Page {
     FontTerminal,
     FontSize,
     FontUi,
-    LogName { binary: bool },
-    LogMode { binary: bool, name: String },
-    LogPlain { name: String, append: bool },
-    LogStamp { name: String, append: bool, plain: bool },
+    LogName {
+        binary: bool,
+    },
+    LogMode {
+        binary: bool,
+        name: String,
+    },
+    LogPlain {
+        name: String,
+        append: bool,
+    },
+    LogStamp {
+        name: String,
+        append: bool,
+        plain: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -132,7 +147,8 @@ impl Workspace {
         }
         window.set_window_title("rs-term");
         let names = cx.text_system().all_font_names();
-        let terminal_font = color::resolve_font(&names, &settings.terminal.font_family).map(str::to_string);
+        let terminal_font =
+            color::resolve_font(&names, &settings.terminal.font_family).map(str::to_string);
         if terminal_font.is_none() {
             status = format!("{status} 端末フォントが無い");
         }
@@ -199,27 +215,25 @@ impl Workspace {
     fn poll_ports(&mut self, cx: &mut Context<Self>) {
         self.port_token = self.port_token.wrapping_add(1);
         let token = self.port_token;
-        self.port_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            loop {
-                let listed = cx
-                    .background_executor()
-                    .spawn(async { rs_term_core::list_ports() })
-                    .await;
-                let keep = this
-                    .update(cx, |this, cx| {
-                        if this.port_token != token || !matches!(this.page, Page::Ports) {
-                            return false;
-                        }
-                        this.ports = listed.map_err(|error| error.to_string());
-                        cx.notify();
-                        true
-                    })
-                    .unwrap_or(false);
-                if !keep {
-                    break;
-                }
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+        self.port_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| loop {
+            let listed = cx
+                .background_executor()
+                .spawn(async { rs_term_core::list_ports() })
+                .await;
+            let keep = this
+                .update(cx, |this, cx| {
+                    if this.port_token != token || !matches!(this.page, Page::Ports) {
+                        return false;
+                    }
+                    this.ports = listed.map_err(|error| error.to_string());
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if !keep {
+                break;
             }
+            cx.background_executor().timer(Duration::from_secs(1)).await;
         }));
     }
 
@@ -350,7 +364,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &actions::Break, _, cx| {
                 if let Some(session) = this.focused_session() {
-                    let _ = session.apply_input(Input::Break { hold: Duration::from_millis(250) });
+                    let _ = session.apply_input(Input::Break {
+                        hold: Duration::from_millis(250),
+                    });
                 }
                 cx.notify();
             }))
@@ -360,14 +376,28 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &actions::SplitHorizontal, _, cx| {
                 this.split(Axis::Stacked, cx);
             }))
-            .on_action(cx.listener(|this, _: &actions::FocusLeft, _, cx| this.move_focus(Direction::Left, cx)))
-            .on_action(cx.listener(|this, _: &actions::FocusDown, _, cx| this.move_focus(Direction::Down, cx)))
-            .on_action(cx.listener(|this, _: &actions::FocusUp, _, cx| this.move_focus(Direction::Up, cx)))
-            .on_action(cx.listener(|this, _: &actions::FocusRight, _, cx| this.move_focus(Direction::Right, cx)))
-            .on_action(cx.listener(|this, _: &actions::SwapLeft, _, cx| this.swap(Direction::Left, cx)))
-            .on_action(cx.listener(|this, _: &actions::SwapDown, _, cx| this.swap(Direction::Down, cx)))
+            .on_action(cx.listener(|this, _: &actions::FocusLeft, _, cx| {
+                this.move_focus(Direction::Left, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::FocusDown, _, cx| {
+                this.move_focus(Direction::Down, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::FocusUp, _, cx| this.move_focus(Direction::Up, cx)),
+            )
+            .on_action(cx.listener(|this, _: &actions::FocusRight, _, cx| {
+                this.move_focus(Direction::Right, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::SwapLeft, _, cx| this.swap(Direction::Left, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::SwapDown, _, cx| this.swap(Direction::Down, cx)),
+            )
             .on_action(cx.listener(|this, _: &actions::SwapUp, _, cx| this.swap(Direction::Up, cx)))
-            .on_action(cx.listener(|this, _: &actions::SwapRight, _, cx| this.swap(Direction::Right, cx)))
+            .on_action(
+                cx.listener(|this, _: &actions::SwapRight, _, cx| this.swap(Direction::Right, cx)),
+            )
             .on_action(cx.listener(|this, _: &actions::CycleNext, _, cx| {
                 this.layout.cycle(true);
                 cx.notify();
@@ -385,29 +415,83 @@ impl Render for Workspace {
                 this.layout.toggle_resize_mode();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &actions::ResizeLeft, _, cx| this.resize(Direction::Left, cx)))
-            .on_action(cx.listener(|this, _: &actions::ResizeDown, _, cx| this.resize(Direction::Down, cx)))
-            .on_action(cx.listener(|this, _: &actions::ResizeUp, _, cx| this.resize(Direction::Up, cx)))
-            .on_action(cx.listener(|this, _: &actions::ResizeRight, _, cx| this.resize(Direction::Right, cx)))
-            .on_action(cx.listener(|this, _: &actions::ThemeDark, window, cx| this.set_theme("dark", window, cx)))
-            .on_action(cx.listener(|this, _: &actions::ThemeLight, window, cx| this.set_theme("light", window, cx)))
-            .on_action(cx.listener(|this, _: &actions::FontTerminal, _, cx| this.open_palette(Page::FontTerminal, cx)))
-            .on_action(cx.listener(|this, _: &actions::FontSize, _, cx| this.open_palette(Page::FontSize, cx)))
-            .on_action(cx.listener(|this, _: &actions::FontUi, _, cx| this.open_palette(Page::FontUi, cx)))
-            .on_action(cx.listener(|this, _: &actions::Baud, _, cx| this.open_palette(Page::Baud, cx)))
-            .on_action(cx.listener(|this, _: &actions::Framing, _, cx| this.open_palette(Page::FramingData, cx)))
-            .on_action(cx.listener(|this, _: &actions::Flow, _, cx| this.open_palette(Page::Flow, cx)))
-            .on_action(cx.listener(|this, _: &actions::Dtr, _, cx| this.open_palette(Page::Dtr, cx)))
-            .on_action(cx.listener(|this, _: &actions::Rts, _, cx| this.open_palette(Page::Rts, cx)))
-            .on_action(cx.listener(|this, _: &actions::Encoding, _, cx| this.open_palette(Page::Encoding, cx)))
-            .on_action(cx.listener(|this, _: &actions::Newline, _, cx| this.open_palette(Page::Receive, cx)))
-            .on_action(cx.listener(|this, _: &actions::LocalEcho, _, cx| this.open_palette(Page::Echo, cx)))
-            .on_action(cx.listener(|this, _: &actions::SendText, _, cx| this.open_palette(Page::SendText, cx)))
-            .on_action(cx.listener(|this, _: &actions::LogBinary, _, cx| this.open_palette(Page::LogName { binary: true }, cx)))
-            .on_action(cx.listener(|this, _: &actions::LogText, _, cx| this.open_palette(Page::LogName { binary: false }, cx)))
-            .on_action(cx.listener(|this, _: &actions::LogPause, _, cx| this.log_simple(LogCommand::Pause, cx)))
-            .on_action(cx.listener(|this, _: &actions::LogResume, _, cx| this.log_simple(LogCommand::Resume, cx)))
-            .on_action(cx.listener(|this, _: &actions::LogStop, _, cx| this.log_simple(LogCommand::Stop, cx)))
+            .on_action(
+                cx.listener(|this, _: &actions::ResizeLeft, _, cx| {
+                    this.resize(Direction::Left, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::ResizeDown, _, cx| {
+                    this.resize(Direction::Down, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::ResizeUp, _, cx| this.resize(Direction::Up, cx)),
+            )
+            .on_action(cx.listener(|this, _: &actions::ResizeRight, _, cx| {
+                this.resize(Direction::Right, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::ThemeDark, window, cx| {
+                this.set_theme("dark", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::ThemeLight, window, cx| {
+                this.set_theme("light", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::FontTerminal, _, cx| {
+                this.open_palette(Page::FontTerminal, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::FontSize, _, cx| {
+                this.open_palette(Page::FontSize, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::FontUi, _, cx| this.open_palette(Page::FontUi, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::Baud, _, cx| this.open_palette(Page::Baud, cx)),
+            )
+            .on_action(cx.listener(|this, _: &actions::Framing, _, cx| {
+                this.open_palette(Page::FramingData, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::Flow, _, cx| this.open_palette(Page::Flow, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::Dtr, _, cx| this.open_palette(Page::Dtr, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::Rts, _, cx| this.open_palette(Page::Rts, cx)),
+            )
+            .on_action(cx.listener(|this, _: &actions::Encoding, _, cx| {
+                this.open_palette(Page::Encoding, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &actions::Newline, _, cx| {
+                    this.open_palette(Page::Receive, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &actions::LocalEcho, _, cx| {
+                    this.open_palette(Page::Echo, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &actions::SendText, _, cx| {
+                this.open_palette(Page::SendText, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::LogBinary, _, cx| {
+                this.open_palette(Page::LogName { binary: true }, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::LogText, _, cx| {
+                this.open_palette(Page::LogName { binary: false }, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::LogPause, _, cx| {
+                this.log_simple(LogCommand::Pause, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::LogResume, _, cx| {
+                this.log_simple(LogCommand::Resume, cx)
+            }))
+            .on_action(cx.listener(|this, _: &actions::LogStop, _, cx| {
+                this.log_simple(LogCommand::Stop, cx)
+            }))
             .on_action(cx.listener(|this, _: &actions::Copy, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &actions::Paste, _, cx| this.paste(cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.on_key(event, cx)))
@@ -423,21 +507,23 @@ impl Render for Workspace {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(div().w(px(560.0)).child(
-                            Command::new(&command)
-                                .items(items)
-                                .placeholder("コマンド")
-                                .on_cancel(move |_window, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.cancel_page(cx));
-                                })
-                                .on_confirm(move |path, _window, cx| {
-                                    let _ = confirm.update(cx, |this, cx| {
-                                        if !matches!(this.rendered_page, Page::Root) {
-                                            this.confirm_row(path.row, cx);
-                                        }
-                                    });
-                                }),
-                        )),
+                        .child(
+                            div().w(px(560.0)).child(
+                                Command::new(&command)
+                                    .items(items)
+                                    .placeholder("コマンド")
+                                    .on_cancel(move |_window, cx| {
+                                        let _ = weak.update(cx, |this, cx| this.cancel_page(cx));
+                                    })
+                                    .on_confirm(move |path, _window, cx| {
+                                        let _ = confirm.update(cx, |this, cx| {
+                                            if !matches!(this.rendered_page, Page::Root) {
+                                                this.confirm_row(path.row, cx);
+                                            }
+                                        });
+                                    }),
+                            ),
+                        ),
                 )
             })
     }

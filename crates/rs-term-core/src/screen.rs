@@ -209,7 +209,13 @@ pub(crate) struct Screen {
 }
 
 impl Screen {
-    pub(crate) fn new(columns: usize, rows: usize, scrollback: usize, encoding: SessionEncoding, newline: Newline) -> Self {
+    pub(crate) fn new(
+        columns: usize,
+        rows: usize,
+        scrollback: usize,
+        encoding: SessionEncoding,
+        newline: Newline,
+    ) -> Self {
         let columns = columns.max(1);
         let rows = rows.max(1);
         let replies = Rc::new(RefCell::new(Vec::new()));
@@ -266,7 +272,8 @@ impl Screen {
     fn feed_utf8(&mut self, decoded: &[u8]) -> ApplyOutcome {
         let converted = self.newlines.push(decoded);
         let mut text = Vec::new();
-        self.log_parser.advance(&mut TextLog { out: &mut text }, &converted);
+        self.log_parser
+            .advance(&mut TextLog { out: &mut text }, &converted);
         self.parser.advance(&mut self.term, &converted);
         ApplyOutcome {
             text,
@@ -314,7 +321,8 @@ impl Screen {
     }
 
     pub(crate) fn scroll_page(&mut self, up: bool) {
-        self.term.scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
+        self.term
+            .scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
     }
 
     pub(crate) fn scroll_top(&mut self) {

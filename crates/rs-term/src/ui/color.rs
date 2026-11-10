@@ -7,13 +7,21 @@
 use rs_term_core::{AnsiName, CellColor, Rgb, TerminalPalette};
 
 const fn level(index: u8) -> u8 {
-    if index == 0 { 0 } else { 55 + 40 * index }
+    if index == 0 {
+        0
+    } else {
+        55 + 40 * index
+    }
 }
 
 pub fn xterm_cube(index: u8) -> Rgb {
     if index >= 232 {
         let gray = 8 + (index - 232) * 10;
-        return Rgb { r: gray, g: gray, b: gray };
+        return Rgb {
+            r: gray,
+            g: gray,
+            b: gray,
+        };
     }
     let offset = index.saturating_sub(16);
     Rgb {
@@ -23,7 +31,13 @@ pub fn xterm_cube(index: u8) -> Rgb {
     }
 }
 
-pub fn resolve(fg: &CellColor, bg: &CellColor, inverse: bool, colors: &[Option<Rgb>], palette: &TerminalPalette) -> (Rgb, Rgb) {
+pub fn resolve(
+    fg: &CellColor,
+    bg: &CellColor,
+    inverse: bool,
+    colors: &[Option<Rgb>],
+    palette: &TerminalPalette,
+) -> (Rgb, Rgb) {
     let mut fg = resolve_one(fg, colors, palette, Role::Foreground);
     let mut bg = resolve_one(bg, colors, palette, Role::Background);
     if inverse {
@@ -38,7 +52,12 @@ enum Role {
     Background,
 }
 
-fn resolve_one(color: &CellColor, colors: &[Option<Rgb>], palette: &TerminalPalette, role: Role) -> Rgb {
+fn resolve_one(
+    color: &CellColor,
+    colors: &[Option<Rgb>],
+    palette: &TerminalPalette,
+    role: Role,
+) -> Rgb {
     match color {
         CellColor::Rgb(rgb) => *rgb,
         CellColor::Indexed(index) => {
@@ -78,10 +97,14 @@ fn named(name: AnsiName, colors: &[Option<Rgb>], palette: &TerminalPalette, role
         }
         AnsiName::Background => override_or(colors, 257, palette.background),
         AnsiName::Cursor => override_or(colors, 258, palette.cursor),
-        AnsiName::DimForeground => override_or(colors, 268, match role {
-            Role::Foreground => palette.foreground,
-            Role::Background => palette.background,
-        }),
+        AnsiName::DimForeground => override_or(
+            colors,
+            268,
+            match role {
+                Role::Foreground => palette.foreground,
+                Role::Background => palette.background,
+            },
+        ),
         AnsiName::DimBlack => override_or(colors, 259, ansi(0)),
         AnsiName::DimRed => override_or(colors, 260, ansi(1)),
         AnsiName::DimGreen => override_or(colors, 261, ansi(2)),
@@ -157,7 +180,14 @@ mod tests {
     #[test]
     fn cube_and_gray_are_the_xterm_table() {
         assert_eq!(xterm_cube(16), Rgb { r: 0, g: 0, b: 0 });
-        assert_eq!(xterm_cube(255), Rgb { r: 238, g: 238, b: 238 });
+        assert_eq!(
+            xterm_cube(255),
+            Rgb {
+                r: 238,
+                g: 238,
+                b: 238
+            }
+        );
     }
 
     #[test]

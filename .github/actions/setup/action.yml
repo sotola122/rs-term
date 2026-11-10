@@ -1,0 +1,41 @@
+name: Setup
+description: Install the Linux libraries, the repo Rust toolchain, and rust-cache.
+
+inputs:
+  targets:
+    description: Extra rustup targets, space-separated
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Linux system packages
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          pkg-config \
+          libudev-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev \
+          libwayland-dev \
+          libx11-dev \
+          libx11-xcb-dev \
+          libxcb1-dev \
+          libfontconfig1-dev \
+          libvulkan-dev
+
+    - uses: dtolnay/rust-toolchain@1.95.0
+      with:
+        components: clippy, rustfmt
+
+    - name: Add Rust targets
+      if: ${{ inputs.targets != '' }}
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+      run: rustup target add "$TARGETS"
+
+    - uses: Swatinem/rust-cache@v2

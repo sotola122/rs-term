@@ -371,10 +371,7 @@ mod tests {
                 PastePiece::Newline,
             ]
         );
-        assert_eq!(
-            split_paste("ab"),
-            vec![PastePiece::Text("ab".into())]
-        );
+        assert_eq!(split_paste("ab"), vec![PastePiece::Text("ab".into())]);
     }
 
     fn decode_shift_jis(bytes: &[u8]) -> Vec<u8> {

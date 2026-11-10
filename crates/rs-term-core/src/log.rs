@@ -147,7 +147,9 @@ impl LogEngine {
 
     pub(crate) fn record_text(&mut self, atoms: &[TextAtom]) {
         let (plain, timestamp) = match &self.state {
-            LogSession::Running(LogTarget::Text { plain, timestamp, .. }) => (*plain, *timestamp),
+            LogSession::Running(LogTarget::Text {
+                plain, timestamp, ..
+            }) => (*plain, *timestamp),
             _ => return,
         };
         let mut encoded = Vec::new();
@@ -195,7 +197,9 @@ impl LogEngine {
 
     fn start(&mut self, target: LogTarget) -> Result<(), LogError> {
         match &self.state {
-            LogSession::Running(current) | LogSession::Paused(current) if same_target(current, &target) => {
+            LogSession::Running(current) | LogSession::Paused(current)
+                if same_target(current, &target) =>
+            {
                 return Ok(());
             }
             LogSession::Running(_) | LogSession::Paused(_) | LogSession::Failed { .. } => {
@@ -267,10 +271,15 @@ impl LogEngine {
 
     fn needs_rotate(&self, incoming: u64) -> bool {
         let max = match &self.state {
-            LogSession::Running(target) | LogSession::Paused(target) => target_rotate(target).max_bytes,
+            LogSession::Running(target) | LogSession::Paused(target) => {
+                target_rotate(target).max_bytes
+            }
             _ => return false,
         };
-        self.written.saturating_add(self.buffer.len() as u64).saturating_add(incoming) > max
+        self.written
+            .saturating_add(self.buffer.len() as u64)
+            .saturating_add(incoming)
+            > max
             && self.written > 0
     }
 
@@ -289,7 +298,8 @@ impl LogEngine {
         let Some(file) = self.file.as_mut() else {
             return Ok(());
         };
-        file.write_all(&self.buffer).map_err(|error| error.to_string())?;
+        file.write_all(&self.buffer)
+            .map_err(|error| error.to_string())?;
         let flushed = self.buffer.len() as u64;
         self.buffer.clear();
         self.written = self.written.saturating_add(flushed);
@@ -391,7 +401,10 @@ pub fn validate_log_name(name: &str) -> Result<(), LogError> {
     if RESERVED.contains(&upper.as_str()) {
         return Err(LogError::InvalidName(name.to_string()));
     }
-    if let Some(rest) = upper.strip_prefix("COM").or_else(|| upper.strip_prefix("LPT")) {
+    if let Some(rest) = upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+    {
         if rest.len() == 1 && rest.as_bytes()[0].is_ascii_digit() && rest != "0" {
             return Err(LogError::InvalidName(name.to_string()));
         }
@@ -464,7 +477,9 @@ mod tests {
     fn names_reject_traversal_and_reserved_devices() {
         assert!(validate_log_name("com10.log").is_ok());
         assert!(validate_log_name("COM10.log").is_ok());
-        for bad in ["COM1.log", "aux.txt", "a/b", r"a\b", "..", "a..b", "ends.", "ends "] {
+        for bad in [
+            "COM1.log", "aux.txt", "a/b", r"a\b", "..", "a..b", "ends.", "ends ",
+        ] {
             assert!(validate_log_name(bad).is_err(), "{bad}");
         }
     }
