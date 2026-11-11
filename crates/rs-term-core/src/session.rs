@@ -289,6 +289,8 @@ pub struct Session {
     pins: Option<PinState>,
     usb: Option<UsbIdentity>,
     reconnect: bool,
+    rx_bytes: u64,
+    tx_bytes: u64,
 }
 
 impl Session {
@@ -317,7 +319,17 @@ impl Session {
             pins: None,
             usb: None,
             reconnect: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
         }
+    }
+
+    pub fn rx_bytes(&self) -> u64 {
+        self.rx_bytes
+    }
+
+    pub fn tx_bytes(&self) -> u64 {
+        self.tx_bytes
     }
 
     /// Open on the calling thread. The UI uses `begin_connect` instead.
@@ -518,6 +530,7 @@ impl Session {
     }
 
     pub fn apply_rx(&mut self, bytes: &[u8]) {
+        self.rx_bytes = self.rx_bytes.saturating_add(bytes.len() as u64);
         self.log.record_binary(bytes);
         let outcome = self.screen.apply_bytes(bytes);
         self.log.record_text(&outcome.text);
@@ -805,7 +818,10 @@ impl Session {
             });
         }
         let generation = self.generation.load(Ordering::Relaxed);
-        self.send_command(Command::Write { generation, bytes })
+        let queued = bytes.len() as u64;
+        self.send_command(Command::Write { generation, bytes })?;
+        self.tx_bytes = self.tx_bytes.saturating_add(queued);
+        Ok(())
     }
 
     fn send_command(&mut self, command: Command) -> Result<(), SessionError> {
@@ -855,6 +871,54 @@ fn push_chunks(chunks: &mut Vec<Vec<u8>>, bytes: Vec<u8>) {
     }
     for piece in bytes.chunks(4096) {
         chunks.push(piece.to_vec());
+    }
+}
+
+/// Bytes a key becomes on the wire. `app_cursor` selects SS3 arrows.
+/// Character and Enter keys are empty here; use [`key_to_bytes`] for those.
+pub fn encode_key(key: &KeyInput, app_cursor: bool) -> Result<Vec<u8>, SessionError> {
+    key_bytes(key, app_cursor)
+}
+
+/// Wire bytes for one key, including encoded characters and the transmit newline.
+pub fn key_to_bytes(
+    key: &KeyInput,
+    encoding: SessionEncoding,
+    newline: crate::codec::TransmitNewline,
+    app_cursor: bool,
+) -> Result<Vec<u8>, SessionError> {
+    match key {
+        KeyInput::Char(ch) => {
+            let text = ch.to_string();
+            codec::encode(encoding, &text).map_err(|ch| SessionError::Unmappable { ch })
+        }
+        KeyInput::Alt(ch) => {
+            let encoded = codec::encode(encoding, &ch.to_string())
+                .map_err(|ch| SessionError::Unmappable { ch })?;
+            let mut bytes = vec![0x1B];
+            bytes.extend(encoded);
+            Ok(bytes)
+        }
+        KeyInput::Enter => Ok(codec::transmit_newline(newline).to_vec()),
+        other => encode_key(other, app_cursor),
+    }
+}
+
+/// Visual row 0 is the top of the viewport. Alacritty line 0 is the top of
+/// the live screen; lines increase downward, and history is negative once
+/// `display_offset` moves the viewport up.
+pub fn viewport_to_line(row: usize, rows: usize, display_offset: usize) -> i32 {
+    let row = if rows == 0 { 0 } else { row.min(rows - 1) };
+    row as i32 - display_offset as i32
+}
+
+pub fn line_to_viewport(line: i32, rows: usize, display_offset: usize) -> Option<usize> {
+    let rows = rows.max(1);
+    let visual = line + display_offset as i32;
+    if visual >= 0 && (visual as usize) < rows {
+        Some(visual as usize)
+    } else {
+        None
     }
 }
 
@@ -1303,34 +1367,156 @@ mod tests {
     }
 
     #[test]
-    fn status_events_survive_a_full_data_channel() {
-        // 200 chunks arrive while nobody drains the channel (depth 32), then
-        // the port fails. The loss and the dropped count must still arrive
-        // (review N2).
+    fn a_full_data_channel_keeps_every_byte_and_port_lost() {
+        // 200 chunks then a broken pipe. The channel is shallower than that,
+        // so the worker blocks instead of dropping. PortLost still arrives
+        // (review N2, design v7 §7.5).
         let mut reads: VecDeque<io::Result<Vec<u8>>> =
             (0..200).map(|_| Ok(vec![b'x'; 100])).collect();
         reads.push_back(Err(io::Error::new(io::ErrorKind::BrokenPipe, "gone")));
-        let (state, open) = open_shared(PortState {
+        let (_state, open) = open_shared(PortState {
             reads,
             ..empty_state()
         });
         let mut session = session();
         let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
-        wait_until(|| lock(&state).closed);
         let mut lost = false;
-        let mut dropped = 0;
-        let mut data = 0;
-        while let Some(event) = rx.try_recv() {
-            match event {
-                IoEvent::PortLost(_) => lost = true,
-                IoEvent::Dropped { bytes } => dropped = dropped.max(bytes),
-                IoEvent::Data(bytes) => data += bytes.len() as u64,
-                _ => {}
+        let mut data = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && !(lost && data == 200 * 100) {
+            match rx.try_recv() {
+                Some(IoEvent::PortLost(_)) => lost = true,
+                Some(IoEvent::Dropped { .. }) => panic!("receive path dropped bytes"),
+                Some(IoEvent::Data(bytes)) => data += bytes.len() as u64,
+                Some(_) => {}
+                None => thread::sleep(Duration::from_millis(1)),
             }
         }
         assert!(lost, "PortLost was swallowed");
-        assert!(dropped > 0, "dropped count was not reported");
-        assert_eq!(data + dropped, 200 * 100);
+        assert_eq!(data, 200 * 100);
+    }
+
+    #[test]
+    fn a_megabyte_burst_is_not_dropped() {
+        const TOTAL: usize = 1024 * 1024;
+        let mut reads = VecDeque::new();
+        let mut next = 0u8;
+        let mut remaining = TOTAL;
+        while remaining > 0 {
+            let count = remaining.min(100);
+            let mut chunk = Vec::with_capacity(count);
+            for _ in 0..count {
+                chunk.push(next);
+                next = next.wrapping_add(1);
+            }
+            reads.push_back(Ok(chunk));
+            remaining -= count;
+        }
+        let (_state, open) = open_shared(PortState {
+            reads,
+            ..empty_state()
+        });
+        let mut session = session();
+        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let mut got = Vec::with_capacity(TOTAL);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while got.len() < TOTAL && Instant::now() < deadline {
+            match rx.try_recv() {
+                Some(IoEvent::Data(bytes)) => got.extend(bytes),
+                Some(IoEvent::Dropped { .. }) => panic!("receive path dropped bytes"),
+                Some(IoEvent::Pins(_)) => {}
+                Some(other) => panic!("unexpected {other:?}"),
+                None => thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        assert_eq!(got.len(), TOTAL, "short by {}", TOTAL - got.len());
+        let mut expect = 0u8;
+        for (index, byte) in got.iter().enumerate() {
+            assert_eq!(*byte, expect, "mismatch at {index}");
+            expect = expect.wrapping_add(1);
+        }
+    }
+
+    #[test]
+    fn scrollback_shows_earlier_lines() {
+        let mut session = Session::new(SessionConfig {
+            screen: ScreenConfig {
+                columns: 20,
+                rows: 4,
+                scrollback: 100,
+            },
+            newline: Newline {
+                receive: ReceiveNewline::Cr,
+                transmit: TransmitNewline::Cr,
+            },
+            ..SessionConfig::default()
+        });
+        for index in 0..12 {
+            session.apply_rx(format!("L{index:02}\r\n").as_bytes());
+        }
+        let before = visible_rows(&session);
+        assert!(before.iter().any(|row| row.contains("L11")), "{before:?}");
+        assert!(!before.iter().any(|row| row.contains("L00")), "{before:?}");
+        session.scroll_lines(50);
+        let snap = session.screen_content();
+        assert!(snap.display_offset > 0, "offset {}", snap.display_offset);
+        let after = rows_of(&snap);
+        assert!(after.iter().any(|row| row.contains("L00")), "{after:?}");
+    }
+
+    #[test]
+    fn top_row_selection_matches_viewport_lines() {
+        let mut session = Session::new(SessionConfig {
+            screen: ScreenConfig {
+                columns: 20,
+                rows: 4,
+                scrollback: 100,
+            },
+            newline: Newline {
+                receive: ReceiveNewline::Cr,
+                transmit: TransmitNewline::Cr,
+            },
+            ..SessionConfig::default()
+        });
+        session.apply_rx(b"hello\r\n");
+        for _ in 0..8 {
+            session.apply_rx(b"xxxx\r\n");
+        }
+        session.scroll_lines(50);
+        let snap = session.screen_content();
+        assert!(snap.display_offset > 0, "offset {}", snap.display_offset);
+        let line = viewport_to_line(0, snap.rows, snap.display_offset);
+        assert_eq!(line, -(snap.display_offset as i32));
+        session.select_start(line, 0);
+        session.select_update(line, 19);
+        let selected = session.selected_text().unwrap_or_default();
+        let top = rows_of(&snap).into_iter().next().unwrap_or_default();
+        assert!(
+            selected.contains(top.trim()),
+            "selected {selected:?} top {top:?} line {line}"
+        );
+        assert_eq!(
+            line_to_viewport(line, snap.rows, snap.display_offset),
+            Some(0)
+        );
+        let bottom = viewport_to_line(snap.rows - 1, snap.rows, snap.display_offset);
+        assert_eq!(
+            line_to_viewport(bottom, snap.rows, snap.display_offset),
+            Some(snap.rows - 1)
+        );
+    }
+
+    #[test]
+    fn counters_follow_rx_and_tx() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        session.apply_rx(b"abc");
+        assert_eq!(session.rx_bytes(), 3);
+        session.apply_input(Input::Bytes(vec![1, 2, 3, 4])).unwrap();
+        let written = wait_written(&state, 4);
+        assert_eq!(written, vec![1, 2, 3, 4]);
+        assert_eq!(session.tx_bytes(), 4);
     }
 
     #[test]
@@ -1615,14 +1801,28 @@ mod tests {
     }
 
     fn visible(session: &Session) -> String {
-        let snap = session.screen_content();
-        let mut row = String::new();
-        for cell in snap.cells.iter().take(snap.columns) {
-            if cell.width > 0 {
-                row.push_str(&cell.text);
+        rows_of(&session.screen_content())
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    fn visible_rows(session: &Session) -> Vec<String> {
+        rows_of(&session.screen_content())
+    }
+
+    fn rows_of(snap: &crate::screen::ScreenSnapshot) -> Vec<String> {
+        let mut rows = vec![String::new(); snap.rows];
+        for (index, cell) in snap.cells.iter().enumerate() {
+            let row = index / snap.columns.max(1);
+            if row >= rows.len() || cell.width == 0 {
+                continue;
             }
+            rows[row].push_str(&cell.text);
         }
-        row.trim_end().to_string()
+        rows.into_iter()
+            .map(|row| row.trim_end().to_string())
+            .collect()
     }
 
     fn wait_data(rx: &mut EventRx) -> Option<IoEvent> {

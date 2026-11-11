@@ -447,6 +447,10 @@ pub fn port_token(path: &str) -> String {
     path.rsplit(['\\', '/']).next().unwrap_or(path).to_string()
 }
 
+pub fn suggested_log_path(directory: &Path, template: &str, port: &str) -> PathBuf {
+    directory.join(expand_log_name(template, port, Local::now()))
+}
+
 pub fn expand_log_name(template: &str, port: &str, when: DateTime<Local>) -> String {
     template
         .replace("{port}", &port_token(port))

@@ -12,8 +12,9 @@ mod session;
 
 pub use codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
 pub use config::{
-    classic_dark, light_palette, load_settings_file, load_settings_str, palette_by_name,
-    save_settings_file, windows_keymap_path, windows_log_dir, windows_settings_path, LogSettings,
+    classic_dark, light_palette, load_settings_file, load_settings_str, log_dir_from_env,
+    palette_by_name, resolve_log_dir, save_settings_file, settings_path, settings_path_from_env,
+    windows_keymap_path, windows_log_dir, windows_settings_path, DirEnv, LogSettings, OsKind,
     SerialSettings, Settings, TerminalPalette, TerminalSettings, UiSettings,
 };
 
@@ -27,15 +28,16 @@ pub mod names {
 }
 pub use error::{LogError, OpenError, PortError, SessionError};
 pub use log::{
-    expand_log_name, port_token, validate_log_name, LogCommand, LogEncoding, LogSession, LogTarget,
-    Rotate, Timestamp,
+    expand_log_name, port_token, suggested_log_path, validate_log_name, LogCommand, LogEncoding,
+    LogSession, LogTarget, Rotate, Timestamp,
 };
 pub use screen::{AnsiName, CellColor, CellFlags, Rgb, ScreenCell, ScreenCursor, ScreenSnapshot};
 pub use serial::{
     list_ports, usb_identity_matches, DataBits, Flow, Parity, PinState, PortInfo, PortKind,
-    SerialParams, StopBits, UsbIdentity, READ_TIMEOUT,
+    SerialParams, StopBits, UsbIdentity, MAX_PENDING, READ_TIMEOUT,
 };
 pub use session::{
-    Direction, EventRx, Input, IoEvent, KeyInput, Link, Message, OpenedPort, PendingOpen,
-    ScreenConfig, Session, SessionConfig, Severity,
+    encode_key, key_to_bytes, line_to_viewport, viewport_to_line, Direction, EventRx, Input,
+    IoEvent, KeyInput, Link, Message, OpenedPort, PendingOpen, ScreenConfig, Session,
+    SessionConfig, Severity,
 };

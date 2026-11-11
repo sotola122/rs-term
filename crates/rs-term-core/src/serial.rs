@@ -2,8 +2,9 @@
 //!
 //! The thread owns `Box<dyn PortIo>`. There is no Tokio and no `try_clone`.
 //! A read of `TimedOut` or `Interrupted` leaves the link open. Any other read
-//! error is `PortLost`. Shutdown is taken from the command channel even when
-//! the data channel is full.
+//! error is `PortLost`. A full data channel blocks this thread (and therefore
+//! the next read) instead of dropping bytes. Shutdown is still taken from the
+//! command channel while that send is waiting.
 
 use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -16,13 +17,17 @@ use crate::error::PortError;
 use crate::IoEvent;
 
 pub const READ_TIMEOUT: Duration = Duration::from_millis(20);
-const DATA_DEPTH: usize = 32;
+/// 256 chunks of `MAX_CHUNK` is about 1 MiB waiting for the UI.
+const DATA_DEPTH: usize = 256;
 const COMMAND_DEPTH: usize = 32;
 const MAX_CHUNK: usize = 4096;
 /// Upper bound of bytes waiting for the port. One `Input` larger than this
 /// is refused as a whole.
-pub(crate) const MAX_PENDING: usize = 16 * 1024 * 1024;
-const DROP_REPORT_EVERY: Duration = Duration::from_millis(200);
+pub const MAX_PENDING: usize = 16 * 1024 * 1024;
+/// How long a full data channel waits before trying to send again.
+/// Short enough that a draining UI unblocks the read without a long stall,
+/// long enough that shutdown is observed while the buffer stays full.
+const SEND_WAIT: Duration = Duration::from_micros(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataBits {
@@ -285,7 +290,14 @@ fn named(field: &str, error: serialport::Error) -> PortError {
 
 /// `serialport` errors in Japanese. The OS text stays in parentheses so the
 /// cause can still be searched.
+///
+/// POSIX `EBUSY` and a failed `TIOCEXCL` / `flock` are both `NoDevice`, with
+/// the OS sentence still saying "busy" or "lock" (`serialport` 4.10
+/// `posix/error.rs`). That must not be translated as a missing port.
 pub(crate) fn serial_error_text(kind: &serialport::ErrorKind, description: &str) -> String {
+    if is_in_use(kind, description) {
+        return with_os("ポートは使用中（他のプロセスが開いている）", description);
+    }
     let what = match kind {
         serialport::ErrorKind::NoDevice => "ポートが見つからない（抜かれたか、名前が違う）",
         serialport::ErrorKind::InvalidInput => "設定値をポートが受け付けない",
@@ -297,11 +309,23 @@ pub(crate) fn serial_error_text(kind: &serialport::ErrorKind, description: &str)
         serialport::ErrorKind::Io(_) => "入出力エラー",
         serialport::ErrorKind::Unknown => "原因不明のエラー",
     };
+    with_os(what, description)
+}
+
+fn with_os(what: &str, description: &str) -> String {
     if description.is_empty() {
         what.to_string()
     } else {
         format!("{what}（OS: {description}）")
     }
+}
+
+fn is_in_use(kind: &serialport::ErrorKind, description: &str) -> bool {
+    let lower = description.to_ascii_lowercase();
+    if lower.contains("busy") || lower.contains("ebusy") || lower.contains("lock") {
+        return true;
+    }
+    matches!(kind, serialport::ErrorKind::Io(io::ErrorKind::ResourceBusy))
 }
 
 fn map_serial_error(error: serialport::Error) -> PortError {
@@ -367,8 +391,8 @@ pub(crate) struct WorkerHandle {
 }
 
 /// Status events travel on their own unbounded channel. A full data channel
-/// can therefore never swallow `PortLost`, `CommandFailed`, or the dropped
-/// byte count (review N2).
+/// blocks the worker inside `send_data` instead of discarding the chunk, and
+/// that wait still polls the command channel (review N2, design v7 §7.5).
 pub(crate) struct Channels {
     pub data: async_mpsc::Receiver<IoEvent>,
     pub status: async_mpsc::UnboundedReceiver<IoEvent>,
@@ -384,9 +408,6 @@ pub(crate) fn spawn(port: Box<dyn PortIo>, generation: u64) -> (WorkerHandle, Ch
             let outlet = Outlet {
                 data: data_tx,
                 status: status_tx,
-                dropped: 0,
-                reported: 0,
-                last_report: None,
             };
             worker_loop(port, outlet, cmd_rx, generation)
         })
@@ -406,49 +427,165 @@ pub(crate) fn spawn(port: Box<dyn PortIo>, generation: u64) -> (WorkerHandle, Ch
 struct Outlet {
     data: async_mpsc::Sender<IoEvent>,
     status: async_mpsc::UnboundedSender<IoEvent>,
-    dropped: u64,
-    reported: u64,
-    last_report: Option<Instant>,
 }
 
 impl Outlet {
-    fn data(&mut self, bytes: Vec<u8>) {
-        match self.data.try_send(IoEvent::Data(bytes)) {
-            Ok(()) => {}
-            Err(error) if error.is_full() => {
-                if let IoEvent::Data(bytes) = error.into_inner() {
-                    self.dropped += bytes.len() as u64;
-                }
-            }
-            Err(_) => {}
-        }
-    }
-
     fn status(&mut self, event: IoEvent) {
         let _ = self.status.unbounded_send(event);
     }
 
-    /// Report the running dropped-byte total at most every 200 ms.
-    fn report_dropped(&mut self, force: bool) {
-        if self.dropped == self.reported {
-            return;
-        }
-        let due = self
-            .last_report
-            .is_none_or(|at| at.elapsed() >= DROP_REPORT_EVERY);
-        if force || due {
-            self.reported = self.dropped;
-            self.last_report = Some(Instant::now());
-            self.status(IoEvent::Dropped {
-                bytes: self.dropped,
-            });
+    /// Deliver `bytes` or wait until the UI takes them. Commands, including
+    /// shutdown, are handled while the wait is blocked so a full buffer
+    /// cannot pin the port open.
+    fn send_data(
+        &mut self,
+        commands: &Receiver<Command>,
+        ctx: &mut IoCtx<'_>,
+        mut payload: Vec<u8>,
+    ) -> Step {
+        loop {
+            match self.data.try_send(IoEvent::Data(payload)) {
+                Ok(()) => return Step::Continue,
+                Err(error) if error.is_full() => {
+                    payload = match error.into_inner() {
+                        IoEvent::Data(bytes) => bytes,
+                        other => {
+                            self.status(other);
+                            return Step::Continue;
+                        }
+                    };
+                    let step = match commands.try_recv() {
+                        Ok(command) => handle_command(ctx, self, command),
+                        Err(TryRecvError::Empty) => Step::Continue,
+                        Err(TryRecvError::Disconnected) => Step::Stop,
+                    };
+                    if step == Step::Stop {
+                        return Step::Stop;
+                    }
+                    pump_tx(ctx, self);
+                    thread::park_timeout(SEND_WAIT);
+                }
+                Err(_) => return Step::Stop,
+            }
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Continue,
+    Stop,
+}
+
+struct IoCtx<'a> {
+    port: &'a mut Box<dyn PortIo>,
+    pending: &'a mut Vec<u8>,
+    pending_at: &'a mut usize,
+    break_until: &'a mut Option<Instant>,
+    generation: &'a mut u64,
 }
 
 fn read_lost(error: &io::Error) -> PortError {
     PortError::Io {
         message: format!("ポートとの通信が切れた（OS: {error}）"),
+    }
+}
+
+fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> Step {
+    match command {
+        Command::Shutdown => Step::Stop,
+        Command::Cancel { generation: next } => {
+            *ctx.generation = next;
+            ctx.pending.clear();
+            *ctx.pending_at = 0;
+            Step::Continue
+        }
+        Command::Write {
+            generation: write_generation,
+            bytes,
+        } => {
+            if write_generation != *ctx.generation || bytes.is_empty() {
+                return Step::Continue;
+            }
+            if *ctx.pending_at >= ctx.pending.len() {
+                ctx.pending.clear();
+                *ctx.pending_at = 0;
+            }
+            if ctx.pending.len() - *ctx.pending_at + bytes.len() > MAX_PENDING {
+                out.status(IoEvent::CommandFailed(PortError::Io {
+                    message: format!(
+                        "送信待ちが上限 {} MiB を超えるので {} バイトを送らなかった",
+                        MAX_PENDING / (1024 * 1024),
+                        bytes.len()
+                    ),
+                }));
+                return Step::Continue;
+            }
+            ctx.pending.extend(bytes);
+            Step::Continue
+        }
+        Command::Apply(params) => {
+            if let Err(error) = ctx.port.apply(&params) {
+                out.status(IoEvent::ApplyFailed(error));
+            }
+            Step::Continue
+        }
+        Command::Dtr(on) => {
+            if let Err(error) = ctx.port.set_dtr(on) {
+                out.status(IoEvent::CommandFailed(error));
+            }
+            Step::Continue
+        }
+        Command::Rts(on) => {
+            if let Err(error) = ctx.port.set_rts(on) {
+                out.status(IoEvent::CommandFailed(error));
+            }
+            Step::Continue
+        }
+        Command::Break { hold } => {
+            if let Err(error) = ctx.port.set_break(true) {
+                out.status(IoEvent::CommandFailed(error));
+            } else {
+                *ctx.break_until = Some(Instant::now() + hold);
+            }
+            Step::Continue
+        }
+    }
+}
+
+fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
+    if ctx.break_until.is_some_and(|until| Instant::now() >= until) {
+        if let Err(error) = ctx.port.set_break(false) {
+            out.status(IoEvent::CommandFailed(error));
+        }
+        *ctx.break_until = None;
+    }
+
+    if *ctx.pending_at < ctx.pending.len() {
+        match ctx.port.write(&ctx.pending[*ctx.pending_at..]) {
+            Ok(0) => {}
+            Ok(count) => {
+                *ctx.pending_at += count;
+                if *ctx.pending_at >= ctx.pending.len() {
+                    ctx.pending.clear();
+                    *ctx.pending_at = 0;
+                }
+            }
+            // CTS or XOFF holds the line. Keep the rest and retry.
+            Err(error)
+                if error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                out.status(IoEvent::CommandFailed(PortError::Io {
+                    message: format!(
+                        "送信に失敗し、残り {} バイトを捨てた（OS: {error}）",
+                        ctx.pending.len() - *ctx.pending_at
+                    ),
+                }));
+                ctx.pending.clear();
+                *ctx.pending_at = 0;
+            }
+        }
     }
 }
 
@@ -465,18 +602,30 @@ fn worker_loop(
     let mut last_pins: Option<PinState> = None;
     loop {
         let mut read_was_idle = false;
-        match port.read(&mut buffer) {
+        let read = port.read(&mut buffer);
+        let mut ctx = IoCtx {
+            port: &mut port,
+            pending: &mut pending,
+            pending_at: &mut pending_at,
+            break_until: &mut break_until,
+            generation: &mut generation,
+        };
+        match read {
             // `serialport` on Windows turns a zero-length ReadFile into
             // TimedOut, so Ok(0) never means idle there. On Unix it is EOF:
             // the device hung up (review R17).
             Ok(0) => {
-                out.report_dropped(true);
                 out.status(IoEvent::PortLost(PortError::Io {
                     message: "ポートとの通信が切れた（EOF）".into(),
                 }));
                 break;
             }
-            Ok(count) => out.data(buffer[..count.min(MAX_CHUNK)].to_vec()),
+            Ok(count) => {
+                let bytes = buffer[..count.min(MAX_CHUNK)].to_vec();
+                if out.send_data(&commands, &mut ctx, bytes) == Step::Stop {
+                    return;
+                }
+            }
             Err(error)
                 if error.kind() == io::ErrorKind::TimedOut
                     || error.kind() == io::ErrorKind::Interrupted =>
@@ -484,7 +633,6 @@ fn worker_loop(
                 read_was_idle = true;
             }
             Err(error) => {
-                out.report_dropped(true);
                 out.status(IoEvent::PortLost(read_lost(&error)));
                 // Release the handle now (review N3). Only Shutdown is
                 // awaited below.
@@ -497,58 +645,15 @@ fn worker_loop(
             match commands.try_recv() {
                 Ok(command) => {
                     saw_command = true;
-                    match command {
-                        Command::Shutdown => return,
-                        Command::Cancel { generation: next } => {
-                            generation = next;
-                            pending.clear();
-                            pending_at = 0;
-                        }
-                        Command::Write {
-                            generation: write_generation,
-                            bytes,
-                        } => {
-                            if write_generation != generation || bytes.is_empty() {
-                                continue;
-                            }
-                            if pending_at >= pending.len() {
-                                pending.clear();
-                                pending_at = 0;
-                            }
-                            if pending.len() - pending_at + bytes.len() > MAX_PENDING {
-                                out.status(IoEvent::CommandFailed(PortError::Io {
-                                    message: format!(
-                                        "送信待ちが上限 {} MiB を超えるので {} バイトを送らなかった",
-                                        MAX_PENDING / (1024 * 1024),
-                                        bytes.len()
-                                    ),
-                                }));
-                                continue;
-                            }
-                            pending.extend(bytes);
-                        }
-                        Command::Apply(params) => {
-                            if let Err(error) = port.apply(&params) {
-                                out.status(IoEvent::ApplyFailed(error));
-                            }
-                        }
-                        Command::Dtr(on) => {
-                            if let Err(error) = port.set_dtr(on) {
-                                out.status(IoEvent::CommandFailed(error));
-                            }
-                        }
-                        Command::Rts(on) => {
-                            if let Err(error) = port.set_rts(on) {
-                                out.status(IoEvent::CommandFailed(error));
-                            }
-                        }
-                        Command::Break { hold } => {
-                            if let Err(error) = port.set_break(true) {
-                                out.status(IoEvent::CommandFailed(error));
-                            } else {
-                                break_until = Some(Instant::now() + hold);
-                            }
-                        }
+                    let mut ctx = IoCtx {
+                        port: &mut port,
+                        pending: &mut pending,
+                        pending_at: &mut pending_at,
+                        break_until: &mut break_until,
+                        generation: &mut generation,
+                    };
+                    if handle_command(&mut ctx, &mut out, command) == Step::Stop {
+                        return;
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -556,39 +661,14 @@ fn worker_loop(
             }
         }
 
-        if break_until.is_some_and(|until| Instant::now() >= until) {
-            if let Err(error) = port.set_break(false) {
-                out.status(IoEvent::CommandFailed(error));
-            }
-            break_until = None;
-        }
-
-        if pending_at < pending.len() {
-            match port.write(&pending[pending_at..]) {
-                Ok(0) => {}
-                Ok(count) => {
-                    pending_at += count;
-                    if pending_at >= pending.len() {
-                        pending.clear();
-                        pending_at = 0;
-                    }
-                }
-                // CTS or XOFF holds the line. Keep the rest and retry.
-                Err(error)
-                    if error.kind() == io::ErrorKind::TimedOut
-                        || error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    out.status(IoEvent::CommandFailed(PortError::Io {
-                        message: format!(
-                            "送信に失敗し、残り {} バイトを捨てた（OS: {error}）",
-                            pending.len() - pending_at
-                        ),
-                    }));
-                    pending.clear();
-                    pending_at = 0;
-                }
-            }
-        }
+        let mut ctx = IoCtx {
+            port: &mut port,
+            pending: &mut pending,
+            pending_at: &mut pending_at,
+            break_until: &mut break_until,
+            generation: &mut generation,
+        };
+        pump_tx(&mut ctx, &mut out);
 
         if let Ok(pins) = port.pins() {
             if last_pins != Some(pins) {
@@ -596,8 +676,6 @@ fn worker_loop(
                 out.status(IoEvent::Pins(pins));
             }
         }
-
-        out.report_dropped(false);
 
         if read_was_idle && !saw_command && pending_at >= pending.len() {
             // A real port already blocked inside `read` for `read_timeout`.
@@ -640,5 +718,27 @@ mod tests {
         let mut other = full.clone();
         other.serial_number = Some("XYZ".into());
         assert!(!usb_identity_matches(&full, &other));
+    }
+
+    #[test]
+    fn busy_is_not_reported_as_missing() {
+        let busy = serial_error_text(&serialport::ErrorKind::NoDevice, "Device or resource busy");
+        assert!(busy.contains("使用中"), "{busy}");
+        assert!(!busy.contains("見つからない"), "{busy}");
+        assert!(busy.contains("Device or resource busy"), "{busy}");
+
+        let locked = serial_error_text(
+            &serialport::ErrorKind::NoDevice,
+            "Unable to acquire exclusive lock on serial port",
+        );
+        assert!(locked.contains("使用中"), "{locked}");
+
+        let missing = serial_error_text(&serialport::ErrorKind::NoDevice, "");
+        assert!(missing.contains("見つからない"), "{missing}");
+        assert!(!missing.contains("使用中"), "{missing}");
+
+        let resource =
+            serial_error_text(&serialport::ErrorKind::Io(io::ErrorKind::ResourceBusy), "");
+        assert!(resource.contains("使用中"), "{resource}");
     }
 }

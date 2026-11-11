@@ -68,7 +68,12 @@ impl fmt::Display for PortError {
 impl fmt::Display for SessionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SessionError::NotOpen => write!(f, "未接続なので送らなかった（Ctrl+Shift+K で接続）"),
+            SessionError::NotOpen => {
+                write!(
+                    f,
+                    "未接続なので送らなかった（プレフィックスの次に c で接続）"
+                )
+            }
             SessionError::Port(error) => write!(f, "{error}"),
             SessionError::Unmappable { ch } => write!(
                 f,
@@ -93,10 +98,10 @@ impl fmt::Display for LogError {
         match self {
             LogError::NotRunning => write!(f, "ログは開始していない"),
             LogError::Busy => {
-                write!(f, "そのログファイルは別のペインかアプリが使用中")
+                write!(f, "そのログファイルは別のプロセスが使用中")
             }
             LogError::AlreadyRunning => {
-                write!(f, "このペインは別のファイルへログ中。先に「ログ停止」")
+                write!(f, "すでに別のファイルへログ中。先にログを停止")
             }
             LogError::InvalidName(reason) => write!(f, "ログのファイル名が使えない: {reason}"),
             LogError::Io { message } => write!(f, "ログの書き込みに失敗: {message}"),

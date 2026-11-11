@@ -413,6 +413,109 @@ pub fn windows_log_dir(local_appdata: Option<&str>) -> Option<PathBuf> {
     Some(PathBuf::from(local).join("rs-term").join("logs"))
 }
 
+/// Which OS a path is resolved for. Tests pass this in so they do not depend
+/// on the runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsKind {
+    Windows,
+    Macos,
+    Linux,
+}
+
+/// Environment values used to place settings and logs. Empty strings are
+/// treated as missing by [`DirEnv::from_process`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEnv {
+    pub os: OsKind,
+    pub home: Option<String>,
+    pub appdata: Option<String>,
+    pub local_appdata: Option<String>,
+    pub xdg_config_home: Option<String>,
+    pub xdg_state_home: Option<String>,
+}
+
+impl DirEnv {
+    pub fn from_process() -> Self {
+        Self {
+            os: current_os(),
+            home: env_nonempty("HOME").or_else(|| env_nonempty("USERPROFILE")),
+            appdata: env_nonempty("APPDATA"),
+            local_appdata: env_nonempty("LOCALAPPDATA"),
+            xdg_config_home: env_nonempty("XDG_CONFIG_HOME"),
+            xdg_state_home: env_nonempty("XDG_STATE_HOME"),
+        }
+    }
+}
+
+fn current_os() -> OsKind {
+    if cfg!(windows) {
+        OsKind::Windows
+    } else if cfg!(target_os = "macos") {
+        OsKind::Macos
+    } else {
+        OsKind::Linux
+    }
+}
+
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+fn filled(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|text| !text.is_empty())
+}
+
+/// `settings.toml` for this environment. `None` when no home directory is known.
+pub fn settings_path(env: &DirEnv) -> Option<PathBuf> {
+    config_dir(env).map(|dir| dir.join("settings.toml"))
+}
+
+pub fn settings_path_from_env() -> Option<PathBuf> {
+    settings_path(&DirEnv::from_process())
+}
+
+fn config_dir(env: &DirEnv) -> Option<PathBuf> {
+    match env.os {
+        OsKind::Windows => filled(&env.appdata).map(|path| PathBuf::from(path).join("rs-term")),
+        OsKind::Macos => filled(&env.home)
+            .map(|home| PathBuf::from(home).join("Library/Application Support/rs-term")),
+        OsKind::Linux => {
+            if let Some(config) = filled(&env.xdg_config_home) {
+                return Some(PathBuf::from(config).join("rs-term"));
+            }
+            filled(&env.home).map(|home| PathBuf::from(home).join(".config/rs-term"))
+        }
+    }
+}
+
+/// Log directory. A non-empty `configured` value wins. Otherwise the platform
+/// directory, then the process temp dir. Linux does not consult `LOCALAPPDATA`.
+pub fn resolve_log_dir(configured: &str, env: &DirEnv) -> PathBuf {
+    if !configured.is_empty() {
+        return PathBuf::from(configured);
+    }
+    platform_log_dir(env).unwrap_or_else(|| std::env::temp_dir().join("rs-term").join("logs"))
+}
+
+pub fn log_dir_from_env(configured: &str) -> PathBuf {
+    resolve_log_dir(configured, &DirEnv::from_process())
+}
+
+fn platform_log_dir(env: &DirEnv) -> Option<PathBuf> {
+    match env.os {
+        OsKind::Windows => windows_log_dir(filled(&env.local_appdata)),
+        OsKind::Macos => {
+            filled(&env.home).map(|home| PathBuf::from(home).join("Library/Logs/rs-term"))
+        }
+        OsKind::Linux => {
+            if let Some(state) = filled(&env.xdg_state_home) {
+                return Some(PathBuf::from(state).join("rs-term").join("logs"));
+            }
+            filled(&env.home).map(|home| PathBuf::from(home).join(".local/state/rs-term/logs"))
+        }
+    }
+}
+
 pub fn load_settings_str(text: &str) -> Result<Settings, String> {
     let raw: RawSettings =
         toml::from_str(text).map_err(|error| format!("TOML として読めない: {error}"))?;
@@ -822,6 +925,90 @@ text_encoding = "utf-8"
         let path = windows_settings_path(Some("C:\\Users\\a\\AppData\\Roaming")).unwrap();
         assert!(
             path.ends_with("rs-term/settings.toml") || path.ends_with("rs-term\\settings.toml")
+        );
+    }
+
+    fn env_linux() -> DirEnv {
+        DirEnv {
+            os: OsKind::Linux,
+            home: None,
+            appdata: None,
+            local_appdata: None,
+            xdg_config_home: None,
+            xdg_state_home: None,
+        }
+    }
+
+    #[test]
+    fn linux_log_dir_uses_xdg_state_and_ignores_localappdata() {
+        let mut env = env_linux();
+        env.local_appdata = Some(r"C:\Users\a\AppData\Local".into());
+        env.xdg_state_home = Some("/var/state".into());
+        assert_eq!(
+            resolve_log_dir("", &env),
+            PathBuf::from("/var/state/rs-term/logs")
+        );
+    }
+
+    #[test]
+    fn linux_log_dir_falls_back_to_home_state() {
+        let mut env = env_linux();
+        env.home = Some("/home/a".into());
+        env.local_appdata = Some(r"C:\Users\a\AppData\Local".into());
+        assert_eq!(
+            resolve_log_dir("", &env),
+            PathBuf::from("/home/a/.local/state/rs-term/logs")
+        );
+    }
+
+    #[test]
+    fn configured_log_directory_wins() {
+        let env = env_linux();
+        assert_eq!(
+            resolve_log_dir("/custom/logs", &env),
+            PathBuf::from("/custom/logs")
+        );
+    }
+
+    #[test]
+    fn missing_linux_dirs_fall_back_to_temp_not_localappdata() {
+        let path = resolve_log_dir("", &env_linux());
+        assert_eq!(path, std::env::temp_dir().join("rs-term").join("logs"));
+        assert!(!path.display().to_string().contains("LOCALAPPDATA"));
+    }
+
+    #[test]
+    fn windows_log_dir_uses_localappdata() {
+        let env = DirEnv {
+            os: OsKind::Windows,
+            home: Some(r"C:\Users\a".into()),
+            appdata: Some(r"C:\Users\a\AppData\Roaming".into()),
+            local_appdata: Some(r"C:\Users\a\AppData\Local".into()),
+            xdg_config_home: None,
+            xdg_state_home: None,
+        };
+        let path = resolve_log_dir("", &env);
+        assert!(
+            path.ends_with("rs-term/logs") || path.ends_with(r"rs-term\logs"),
+            "{path:?}"
+        );
+        let text = path.display().to_string();
+        assert!(text.contains("Local"), "{text}");
+    }
+
+    #[test]
+    fn linux_settings_path_prefers_xdg_config_home() {
+        let mut env = env_linux();
+        env.home = Some("/home/a".into());
+        env.xdg_config_home = Some("/cfg".into());
+        assert_eq!(
+            settings_path(&env),
+            Some(PathBuf::from("/cfg/rs-term/settings.toml"))
+        );
+        env.xdg_config_home = None;
+        assert_eq!(
+            settings_path(&env),
+            Some(PathBuf::from("/home/a/.config/rs-term/settings.toml"))
         );
     }
 }
