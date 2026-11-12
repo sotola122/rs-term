@@ -202,7 +202,9 @@ pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortEr
     if let Some(dtr) = params.dtr_on_open {
         builder = builder.dtr_on_open(dtr);
     }
-    let port = builder.open().map_err(map_serial_error)?;
+    let port = builder
+        .open()
+        .map_err(|error| map_open_error(&params.path, error))?;
     let mut io = SerialIo {
         port,
         flow: params.flow,
@@ -295,7 +297,19 @@ fn named(field: &str, error: serialport::Error) -> PortError {
 /// the OS sentence still saying "busy" or "lock" (`serialport` 4.10
 /// `posix/error.rs`). That must not be translated as a missing port.
 pub(crate) fn serial_error_text(kind: &serialport::ErrorKind, description: &str) -> String {
-    if is_in_use(kind, description) {
+    open_error_text(kind, description, false)
+}
+
+/// As `serial_error_text`. `access_denied` says the open failed with
+/// `ERROR_ACCESS_DENIED`, which `serialport` folds into `NoDevice` together
+/// with "not found" and keeps only as localized text. On Windows that is how
+/// a port held by another process looks, so it is reported as in use.
+pub(crate) fn open_error_text(
+    kind: &serialport::ErrorKind,
+    description: &str,
+    access_denied: bool,
+) -> String {
+    if access_denied || is_in_use(kind, description) {
         return with_os("ポートは使用中（他のプロセスが開いている）", description);
     }
     let what = match kind {
@@ -326,6 +340,44 @@ fn is_in_use(kind: &serialport::ErrorKind, description: &str) -> bool {
         return true;
     }
     matches!(kind, serialport::ErrorKind::Io(io::ErrorKind::ResourceBusy))
+}
+
+/// An open error. `serialport` drops the OS error code, so for `NoDevice`
+/// the path is probed once more to see whether the OS says "access denied".
+fn map_open_error(path: &str, error: serialport::Error) -> PortError {
+    let denied = matches!(error.kind, serialport::ErrorKind::NoDevice) && probe_access_denied(path);
+    PortError::Io {
+        message: open_error_text(&error.kind, &error.description, denied),
+    }
+}
+
+/// True for the errors a port held by another process gives on Windows:
+/// `PermissionDenied`, or raw OS error 5 (`ERROR_ACCESS_DENIED`).
+pub(crate) fn is_access_denied(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+        || (cfg!(windows) && error.raw_os_error() == Some(5))
+}
+
+#[cfg(windows)]
+fn probe_access_denied(path: &str) -> bool {
+    let device = if path.starts_with(r"\\") {
+        path.to_string()
+    } else {
+        format!(r"\\.\{path}")
+    };
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(device)
+    {
+        Ok(_) => false,
+        Err(error) => is_access_denied(&error),
+    }
+}
+
+#[cfg(not(windows))]
+fn probe_access_denied(_path: &str) -> bool {
+    false
 }
 
 fn map_serial_error(error: serialport::Error) -> PortError {
@@ -740,5 +792,46 @@ mod tests {
         let resource =
             serial_error_text(&serialport::ErrorKind::Io(io::ErrorKind::ResourceBusy), "");
         assert!(resource.contains("使用中"), "{resource}");
+    }
+
+    #[test]
+    fn access_denied_on_open_is_busy_not_missing() {
+        // Windows: serialport reports ERROR_ACCESS_DENIED as NoDevice with
+        // localized text, so the text must not matter.
+        let text = open_error_text(
+            &serialport::ErrorKind::NoDevice,
+            "アクセスが拒否されました。",
+            true,
+        );
+        assert!(text.contains("ポートは使用中"), "{text}");
+        assert!(!text.contains("見つからない"), "{text}");
+        assert!(text.contains("アクセスが拒否されました。"), "{text}");
+        // A missing port (COM77) stays "not found".
+        let missing = open_error_text(
+            &serialport::ErrorKind::NoDevice,
+            "指定されたファイルが見つかりません。",
+            false,
+        );
+        assert!(missing.contains("見つからない"), "{missing}");
+        assert!(!missing.contains("使用中"), "{missing}");
+    }
+
+    #[test]
+    fn access_denied_is_detected_by_code_not_text() {
+        assert!(is_access_denied(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+        assert!(!is_access_denied(&io::Error::from(io::ErrorKind::NotFound)));
+        #[cfg(windows)]
+        {
+            assert!(is_access_denied(&io::Error::from_raw_os_error(5)));
+            assert!(!is_access_denied(&io::Error::from_raw_os_error(2)));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_missing_windows_port_is_not_probed_as_busy() {
+        assert!(!probe_access_denied("COM77"));
     }
 }
