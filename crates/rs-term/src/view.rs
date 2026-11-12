@@ -23,6 +23,7 @@ pub const HELP: &str = "Prefix key (default Ctrl+A), then:
   s  send (a string)  f  file (send a file)
   u  baud             e  encoding
   p  paste (clipboard)
+  t  next theme       T  previous theme
   ?  help             q  quit
   Prefix again        send the prefix's control byte
   Esc                 cancel
@@ -43,9 +44,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         chunks[1],
     );
     if app.show_help() {
-        draw_help(frame, app.help_scroll());
+        draw_help(frame, app.help_scroll(), app.palette());
     } else if let Some(body) = app.modal_body() {
-        draw_modal(frame, &body);
+        draw_modal(frame, &body, app.palette());
     }
 }
 
@@ -213,7 +214,19 @@ fn indexed(index: u8, palette: &TerminalPalette) -> Rgb {
     }
 }
 
-fn draw_modal(frame: &mut Frame, body: &ModalBody) {
+fn rgb_color(rgb: Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
+}
+
+/// The boxes are drawn in the theme's default colors, so they stay readable
+/// on any theme.
+fn box_style(palette: &TerminalPalette) -> Style {
+    Style::default()
+        .fg(rgb_color(palette.foreground))
+        .bg(rgb_color(palette.background))
+}
+
+fn draw_modal(frame: &mut Frame, body: &ModalBody, palette: &TerminalPalette) {
     let height = (body.lines.len() as u16 + 2).clamp(5, 16);
     let area = centered(frame.area(), 68, height);
     frame.render_widget(Clear, area);
@@ -224,10 +237,10 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
         .map(|(text, selected)| {
             let style = if *selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(0xD4, 0xD4, 0xD4))
+                    .fg(rgb_color(palette.background))
+                    .bg(rgb_color(palette.foreground))
             } else {
-                Style::default().fg(Color::Rgb(0xD4, 0xD4, 0xD4))
+                box_style(palette)
             };
             let text = match text.strip_prefix("> ") {
                 Some(input) => format!("> {}", fit_tail(input, inner.saturating_sub(2))),
@@ -238,6 +251,7 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
         .collect();
     let paragraph = Paragraph::new(lines)
         .block(Block::bordered().title(body.title))
+        .style(box_style(palette))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
@@ -296,7 +310,7 @@ pub fn help_max_scroll(area: Rect) -> usize {
     HELP.lines().count().saturating_sub(visible)
 }
 
-fn draw_help(frame: &mut Frame, scroll: usize) {
+fn draw_help(frame: &mut Frame, scroll: usize, palette: &TerminalPalette) {
     let (area, _) = help_geometry(frame.area());
     let scroll = scroll.min(help_max_scroll(frame.area())) as u16;
     frame.render_widget(Clear, area);
@@ -306,6 +320,7 @@ fn draw_help(frame: &mut Frame, scroll: usize) {
                 .title("Help")
                 .padding(Padding::horizontal(1)),
         )
+        .style(box_style(palette))
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
@@ -326,6 +341,7 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use rs_term_core::default_palette;
 
     fn rows(buffer: &Buffer) -> Vec<String> {
         (0..buffer.area.height)
@@ -360,7 +376,9 @@ mod tests {
 
     fn render_help(width: u16, height: u16, scroll: usize) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw_help(frame, scroll)).unwrap();
+        terminal
+            .draw(|frame| draw_help(frame, scroll, &default_palette()))
+            .unwrap();
         rows(terminal.backend().buffer())
     }
 
@@ -409,7 +427,9 @@ mod tests {
             pinned: 2,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| draw_modal(frame, &body)).unwrap();
+        terminal
+            .draw(|frame| draw_modal(frame, &body, &default_palette()))
+            .unwrap();
         let screen = rows(terminal.backend().buffer());
         let row = screen
             .iter()
@@ -434,7 +454,9 @@ mod tests {
 
     fn render_modal(body: &ModalBody) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| draw_modal(frame, body)).unwrap();
+        terminal
+            .draw(|frame| draw_modal(frame, body, &default_palette()))
+            .unwrap();
         rows(terminal.backend().buffer())
     }
 

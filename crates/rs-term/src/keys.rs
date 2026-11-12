@@ -63,6 +63,10 @@ pub enum Command {
     Help,
     Quit,
     Paste,
+    /// The next theme, or the previous one.
+    Theme {
+        forward: bool,
+    },
     Cancel,
 }
 
@@ -162,6 +166,11 @@ fn prefix_action(key: &KeyEvent, prefix: Prefix) -> Action {
         KeyCode::Char('u') => Command::Baud,
         KeyCode::Char('e') => Command::Encoding,
         KeyCode::Char('p') => Command::Paste,
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            Command::Theme { forward: false }
+        }
+        KeyCode::Char('T') => Command::Theme { forward: false },
+        KeyCode::Char('t') => Command::Theme { forward: true },
         KeyCode::Char('?') => Command::Help,
         KeyCode::Char('q') => Command::Quit,
         _ => return Action::Ignore,

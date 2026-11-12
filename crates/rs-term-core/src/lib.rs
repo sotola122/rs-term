@@ -9,13 +9,17 @@ mod log;
 mod screen;
 mod serial;
 mod session;
+mod theme;
 
 pub use codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
 pub use config::{
-    classic_dark, light_palette, load_settings_file, load_settings_str, log_dir_from_env,
-    palette_by_name, resolve_log_dir, settings_path, settings_path_from_env, windows_log_dir,
-    windows_settings_path, DirEnv, LogSettings, OsKind, SerialSettings, Settings, TerminalPalette,
-    TerminalSettings,
+    load_settings_file, load_settings_str, log_dir_from_env, resolve_log_dir, settings_path,
+    settings_path_from_env, windows_log_dir, windows_settings_path, DirEnv, LogSettings, OsKind,
+    SerialSettings, Settings, TerminalSettings,
+};
+pub use theme::{
+    canonical_theme_name, contrast_ratio, default_palette, next_theme, palette_by_name, theme_list,
+    theme_names, TerminalPalette, UiColors, DEFAULT_THEME,
 };
 
 pub use error::{LogError, OpenError, PortError, SessionError};

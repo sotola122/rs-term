@@ -3,7 +3,7 @@
 //! Every table and key is optional; an omitted one takes the built-in default.
 //! A schema other than 1, an unknown key, a syntax error, or an out-of-range
 //! number rejects the whole file. The file is not rewritten.
-//! An unknown `terminal.palette` falls back and is reported. The GUI-era keys
+//! An unknown `terminal.palette` is an error too. The GUI-era keys
 //! the TUI never used (`serial.reconnect`, `serial.reopen_on_start`,
 //! `terminal.font_*`, the `[ui]` and `[layout]` tables) are ignored silently.
 
@@ -14,159 +14,9 @@ use serde::de::IgnoredAny;
 use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
-use crate::screen::{AmbiguousWidth, Rgb};
+use crate::screen::AmbiguousWidth;
 use crate::serial::{parse_switch, DataBits, Flow, Parity, StopBits};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalPalette {
-    pub name: String,
-    pub foreground: Rgb,
-    pub background: Rgb,
-    pub cursor: Rgb,
-    pub selection: Rgb,
-    pub ansi: [Rgb; 16],
-}
-
-pub fn palette_by_name(name: &str) -> Option<TerminalPalette> {
-    match name {
-        "classic-dark" => Some(classic_dark()),
-        "light" => Some(light_palette()),
-        _ => None,
-    }
-}
-
-pub fn classic_dark() -> TerminalPalette {
-    TerminalPalette {
-        name: "classic-dark".into(),
-        foreground: Rgb {
-            r: 0xD4,
-            g: 0xD4,
-            b: 0xD4,
-        },
-        background: Rgb { r: 0, g: 0, b: 0 },
-        cursor: Rgb {
-            r: 0x00,
-            g: 0xC8,
-            b: 0x00,
-        },
-        selection: Rgb {
-            r: 0x26,
-            g: 0x4F,
-            b: 0x78,
-        },
-        ansi: ANSI_16,
-    }
-}
-
-pub fn light_palette() -> TerminalPalette {
-    TerminalPalette {
-        name: "light".into(),
-        foreground: Rgb {
-            r: 0x1E,
-            g: 0x1E,
-            b: 0x1E,
-        },
-        background: Rgb {
-            r: 0xFF,
-            g: 0xFF,
-            b: 0xFF,
-        },
-        cursor: Rgb {
-            r: 0x00,
-            g: 0x64,
-            b: 0x00,
-        },
-        selection: Rgb {
-            r: 0xAD,
-            g: 0xD6,
-            b: 0xFF,
-        },
-        ansi: ANSI_16,
-    }
-}
-
-const ANSI_16: [Rgb; 16] = [
-    Rgb {
-        r: 0x00,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xCD,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0xCD,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0x00,
-        b: 0xEE,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0x00,
-        b: 0xCD,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xCD,
-        b: 0xCD,
-    },
-    Rgb {
-        r: 0xE5,
-        g: 0xE5,
-        b: 0xE5,
-    },
-    Rgb {
-        r: 0x7F,
-        g: 0x7F,
-        b: 0x7F,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xFF,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0xFF,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x5C,
-        g: 0x5C,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0x00,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xFF,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0xFF,
-        b: 0xFF,
-    },
-];
+use crate::theme::{canonical_theme_name, theme_list, DEFAULT_THEME};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -175,7 +25,6 @@ pub struct Settings {
     pub encoding: SessionEncoding,
     pub terminal: TerminalSettings,
     pub log: LogSettings,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,6 +45,7 @@ pub struct TerminalSettings {
     pub rows: usize,
     pub scrollback: usize,
     pub local_echo: bool,
+    /// A theme name, always in its canonical spelling.
     pub palette: String,
     pub ambiguous_width: AmbiguousWidth,
 }
@@ -231,7 +81,7 @@ impl Default for Settings {
                 rows: 24,
                 scrollback: 10_000,
                 local_echo: false,
-                palette: "classic-dark".into(),
+                palette: DEFAULT_THEME.into(),
                 ambiguous_width: AmbiguousWidth::Auto,
             },
             log: LogSettings {
@@ -240,7 +90,6 @@ impl Default for Settings {
                 rotate_bytes: 10_485_760,
                 rotate_keep: 5,
             },
-            warnings: Vec::new(),
         }
     }
 }
@@ -505,14 +354,17 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     {
         return Err("log.text_encoding must be utf-8".into());
     }
-    let mut warnings = Vec::new();
-    let mut palette = terminal.palette.unwrap_or(d.terminal.palette);
-    if palette_by_name(&palette).is_none() {
-        warnings.push(format!(
-            "terminal.palette `{palette}` is not recognized; using classic-dark"
-        ));
-        palette = "classic-dark".into();
-    }
+    let palette = match terminal.palette {
+        None => d.terminal.palette,
+        Some(name) => canonical_theme_name(&name)
+            .ok_or_else(|| {
+                format!(
+                    "terminal.palette `{name}` is not recognized (use one of: {})",
+                    theme_list()
+                )
+            })?
+            .to_string(),
+    };
     let ambiguous_width = pick(
         terminal.ambiguous_width,
         d.terminal.ambiguous_width,
@@ -574,7 +426,6 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
             rotate_bytes,
             rotate_keep,
         },
-        warnings,
     })
 }
 
@@ -641,7 +492,6 @@ text_encoding = "utf-8"
     fn sample_loads() {
         let loaded = load_settings_str(SAMPLE).unwrap();
         assert_eq!(loaded.encoding, SessionEncoding::ShiftJis);
-        assert!(loaded.warnings.is_empty());
         assert_eq!(loaded, Settings::default());
     }
 
@@ -655,7 +505,6 @@ text_encoding = "utf-8"
             .map(|(block, _)| block)
             .expect("README has a toml block");
         let loaded = load_settings_str(block).expect("README example must load");
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.serial.baud_rate, 115_200);
         assert_eq!(loaded.terminal.scrollback, 10_000);
         assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Auto);
@@ -741,11 +590,27 @@ rts = true
     }
 
     #[test]
-    fn unknown_palette_falls_back_without_rejecting() {
+    fn palette_takes_any_theme_name_or_alias() {
+        let text = |name: &str| {
+            SAMPLE.replace(
+                "palette = \"classic-dark\"",
+                &format!("palette = \"{name}\""),
+            )
+        };
+        let loaded = load_settings_str(&text("classic-dark")).unwrap();
+        assert_eq!(loaded.terminal.palette, "dark");
+        let loaded = load_settings_str(&text("Tokyo-Night-Day")).unwrap();
+        assert_eq!(loaded.terminal.palette, "tokyo-night-light");
+        let loaded = load_settings_str(&text("light")).unwrap();
+        assert_eq!(loaded.terminal.palette, "light");
+    }
+
+    #[test]
+    fn unknown_palette_rejects_the_file_and_lists_the_names() {
         let text = SAMPLE.replace("palette = \"classic-dark\"", "palette = \"nope\"");
-        let loaded = load_settings_str(&text).unwrap();
-        assert_eq!(loaded.terminal.palette, "classic-dark");
-        assert_eq!(loaded.warnings.len(), 1);
+        let error = load_settings_str(&text).unwrap_err();
+        assert!(error.contains("terminal.palette `nope`"), "{error}");
+        assert!(error.contains("dark, light, gruvbox-dark"), "{error}");
     }
 
     #[test]
@@ -782,7 +647,6 @@ session = \"utf-8\"
         assert_eq!(loaded.encoding, SessionEncoding::Utf8);
         assert_eq!(loaded.newline, d.newline);
         assert_eq!(loaded.log, d.log);
-        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
@@ -830,7 +694,6 @@ font_fallbacks = [\"a\"]"
                 )
         );
         let loaded = load_settings_str(&text).unwrap();
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded, Settings::default());
     }
 
@@ -851,7 +714,6 @@ id = 2
         );
         let loaded = load_settings_str(&text).unwrap();
         assert_eq!(loaded.serial.baud_rate, 9600);
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     }
 
     #[test]

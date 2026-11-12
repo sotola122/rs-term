@@ -4,7 +4,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use rs_term_core::{
-    parse_switch, AmbiguousWidth, DataBits, Flow, Parity, SessionEncoding, StopBits,
+    canonical_theme_name, parse_switch, theme_list, AmbiguousWidth, DataBits, Flow, Parity,
+    SessionEncoding, StopBits,
 };
 
 use crate::keys::Prefix;
@@ -35,12 +36,20 @@ Options:
       --ambiguous-width <1|2|auto>
                               cells for ambiguous-width characters (default auto:
                               2 only on a conhost with a CJK code page)
+      --theme <NAME>          color theme (default dark), one of:
+                              dark, light, gruvbox-dark, gruvbox-light,
+                              tokyo-night, tokyo-night-storm, tokyo-night-light,
+                              catppuccin-mocha, catppuccin-latte, dracula, nord,
+                              solarized-dark, solarized-light, one-dark,
+                              one-light, kanagawa, kanagawa-lotus, rose-pine,
+                              rose-pine-dawn, vesper
   -h, --help
 
 Keys after the prefix:
   c connect   d disconnect   r reconnect   b break
   l log   L stop log   s send   f file
   u baud   e encoding   p paste
+  t theme (next)   T theme (previous)
   ? help   q quit   Esc cancel
   Press the prefix again to send its control byte.
 ";
@@ -59,6 +68,8 @@ pub struct Cli {
     pub log: Option<PathBuf>,
     pub prefix: Prefix,
     pub ambiguous_width: Option<AmbiguousWidth>,
+    /// The theme's own spelling.
+    pub theme: Option<&'static str>,
     pub help: bool,
 }
 
@@ -167,6 +178,7 @@ fn is_option(flag: &str) -> bool {
             | "--log"
             | "--prefix"
             | "--ambiguous-width"
+            | "--theme"
     )
 }
 
@@ -226,6 +238,11 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
         "--ambiguous-width" => {
             cli.ambiguous_width = Some(AmbiguousWidth::parse(value).ok_or_else(|| {
                 format!("Ambiguous width `{}` must be 1, 2 or auto", lower(value))
+            })?)
+        }
+        "--theme" => {
+            cli.theme = Some(canonical_theme_name(value).ok_or_else(|| {
+                format!("Theme `{}` must be one of: {}", lower(value), theme_list())
             })?)
         }
         _ => return Err(format!("Unknown option: {flag}")),
@@ -306,6 +323,29 @@ mod tests {
         assert_eq!((cli.dtr, cli.rts), (Some(true), Some(false)));
         let error = parse(["--dtr", "high"]).unwrap_err();
         assert!(error.contains("on or off"), "{error}");
+    }
+
+    #[test]
+    fn parses_the_theme_option() {
+        assert_eq!(parse(["COM1"]).unwrap().theme, None);
+        assert_eq!(parse(["--theme", "light"]).unwrap().theme, Some("light"));
+        assert_eq!(parse(["--theme=Classic-Dark"]).unwrap().theme, Some("dark"));
+        assert_eq!(
+            parse(["--theme", "tokyo-night-day"]).unwrap().theme,
+            Some("tokyo-night-light")
+        );
+        let error = parse(["--theme", "pink"]).unwrap_err();
+        assert!(
+            error.contains("`pink`") && error.contains("nord"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn help_lists_every_theme() {
+        for name in rs_term_core::theme_names() {
+            assert!(HELP.contains(name), "{name}");
+        }
     }
 
     #[test]

@@ -14,6 +14,7 @@ One process is one serial session. There are no built-in panes or tabs: run seve
 - Own scrollback (10000 lines by default), scrolled with the mouse wheel or PgUp / PgDn. The host terminal's scrollback is not used.
 - Mouse selection copies through OSC 52 and, when available, the OS clipboard.
 - Bracketed paste.
+- Color themes (dark, light, Gruvbox, Tokyo Night, Catppuccin, Dracula, Nord, Solarized and more), switched at run time.
 - Text logging with size-based rotation.
 - Send a string or a file.
 - Send a break.
@@ -80,6 +81,7 @@ Defaults come from the built-in values or from `settings.toml` (see [Configurati
 | `--log <PATH>` | file path | none | Start a text log to this file at startup |
 | `--prefix <KEY>` | `ctrl-<letter>`, `ctrl-\`, `ctrl-]` | `ctrl-a` | Prefix key (see below) |
 | `--ambiguous-width <W>` | `1`, `2`, `auto` | `auto` | Cells taken by ambiguous-width characters (see [Platform notes](#platform-notes)) |
+| `--theme <NAME>` | see [Themes](#themes) | `dark` | Color theme |
 | `-h`, `--help` | | | Print help and exit |
 
 Values may be given as `--baud 9600`, `--baud=9600` or `-b9600`. `ctrl+a`, `c-a` and `^a` are also accepted spellings of a prefix. Only Ctrl plus a letter, Ctrl+`\` and Ctrl+`]` can be a prefix; other Ctrl combinations cannot be told apart by terminals (for example Ctrl+[ is Esc).
@@ -103,6 +105,7 @@ The default prefix is Ctrl+A (change it with `--prefix`). Press the prefix, then
 | `u` | Baud: change the baud rate |
 | `e` | Encoding: change the encoding (`sjis` or `utf8`) |
 | `p` | Paste: paste the OS clipboard |
+| `t` | Theme: switch to the next theme (`T`: the previous one) |
 | `?` | Help: show the help overlay |
 | `q` | Quit |
 | `Esc` | Cancel: leave the prefix state |
@@ -130,7 +133,7 @@ The bottom row shows, from left to right:
 | link state | `disconnected`, `connecting` (opening), `connected`, `lost` (connection lost) |
 | log state | `LOG off`, `LOG on` (text log running), `LOG failed`, `LOG bin` (binary log running) |
 | `RX n` / `TX n` | Bytes received / sent |
-| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`), or only their keys (`c d r b l L s f u e p ? q Esc`) when the full list does not fit. If even the keys do not fit beside the left items (for example at 80 columns), the left side shrinks to `PREFIX` and the list gets the rest of the row. Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
+| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`), or only their keys (`c d r b l L s f u e p t ? q Esc`) when the full list does not fit. If even the keys do not fit beside the left items (for example at 80 columns), the left side shrinks to `PREFIX` and the list gets the rest of the row. Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
 
 ## Configuration
 
@@ -147,7 +150,7 @@ Behavior:
 - If the file is broken, rs-term starts with the built-in defaults and shows the reason on the status line as an error. The file is never rewritten.
 - Every table and key is optional. A key you omit takes its built-in default, so an empty file is valid and a file may contain only the keys you want to change.
 - Otherwise the schema is strict. A `schema` other than `1`, an unknown key, a syntax error, or an out-of-range number rejects the whole file.
-- Exception: an unknown `terminal.palette` falls back to `classic-dark` with a warning, and the rest of the file still loads.
+- An unknown `terminal.palette` rejects the file too; the error lists the valid theme names.
 - Legacy keys from older versions are accepted and silently ignored (no message): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
 
 A complete `settings.toml` that lists every key (these values are the built-in defaults; you can delete any line):
@@ -177,7 +180,7 @@ columns = 80                # 1..=500
 rows = 24                   # 1..=500
 scrollback = 10000          # 0..=100000
 local_echo = false
-palette = "classic-dark"    # classic-dark, light
+palette = "dark"            # a theme name, see Themes
 ambiguous_width = "auto"    # 1, 2, auto (see Platform notes)
 
 [log]
@@ -188,6 +191,16 @@ rotate_keep = 5             # 1..=20
 text_encoding = "utf-8"     # utf-8 only
 ```
 
+
+## Themes
+
+A theme sets the default text and background colors, the 16 ANSI colors, the cursor, the selection, the status line and the boxes (help, dialogs). Colors that the device sends as 256-color or truecolor attributes are drawn as sent; only the default colors and the 16 named colors follow the theme.
+
+Choose one with `--theme <NAME>` or `palette` under `[terminal]` in `settings.toml` (the option wins). Names are not case sensitive:
+
+`dark, light, gruvbox-dark, gruvbox-light, tokyo-night, tokyo-night-storm, tokyo-night-light, catppuccin-mocha, catppuccin-latte, dracula, nord, solarized-dark, solarized-light, one-dark, one-light, kanagawa, kanagawa-lotus, rose-pine, rose-pine-dawn, vesper`
+
+`classic-dark` is accepted as another spelling of `dark`. The Gruvbox, Catppuccin, Solarized and Tokyo Night themes also answer to `gruvbox`, `catppuccin`, `solarized`, `tokyo-night-day` and so on. Press the prefix, then `t` to switch to the next theme in this order (`T` for the previous one); the status line shows `Theme: <name>`. The switch is not saved: the next start uses the option or the file again.
 
 ## Logs
 

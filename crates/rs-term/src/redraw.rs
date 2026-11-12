@@ -39,6 +39,7 @@ mod tests {
 
     fn view() -> StatusView {
         StatusView {
+            colors: rs_term_core::default_palette().ui,
             prefix: false,
             prefix_label: "Ctrl+A".into(),
             port: "COM3".into(),
@@ -50,6 +51,16 @@ mod tests {
             tx: 0,
             message: None,
         }
+    }
+
+    #[test]
+    fn a_theme_change_alone_draws() {
+        let mut gate = RedrawGate::default();
+        let start = Instant::now();
+        assert!(gate.should_draw(false, view(), start));
+        let mut themed = view();
+        themed.colors = rs_term_core::palette_by_name("light").unwrap().ui;
+        assert!(gate.should_draw(false, themed, start + Duration::from_millis(10)));
     }
 
     #[test]
