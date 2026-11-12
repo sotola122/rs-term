@@ -18,3 +18,6 @@ toml.workspace = true
 
 [dev-dependencies]
 futures = { version = "0.3.31", features = ["executor"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"

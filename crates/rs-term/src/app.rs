@@ -132,6 +132,15 @@ impl App {
         self.quit
     }
 
+    /// Quit path: stop the log and the port, and wait (bounded) until the
+    /// port thread has dropped the port, so the OS never closes a port that
+    /// is still marked exclusive. Run it before the terminal is restored.
+    pub fn shutdown(&mut self) {
+        self.events = None;
+        self.opening = None;
+        self.session.close();
+    }
+
     pub fn show_help(&self) -> bool {
         self.help
     }

@@ -66,5 +66,7 @@ fn run(cli: cli::Cli) -> io::Result<()> {
             dirty = true;
         }
     }
+    // Close the port before `terminal` and `_guard` are dropped.
+    app.shutdown();
     Ok(())
 }

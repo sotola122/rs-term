@@ -7,7 +7,9 @@
 //! Opening a port is split in three so the blocking `open` can run off the
 //! UI thread: `begin_connect` (UI thread), `PendingOpen::open` (any thread),
 //! `finish_connect` (UI thread). Closing never waits on the UI thread: the
-//! command sender is dropped and the thread is reaped by `tick`.
+//! command sender is dropped and the thread is reaped by `tick`. Only
+//! `close` (and `Drop`) wait, and only for `CLOSE_WAIT`, so the port is
+//! really released before the process exits.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -211,15 +213,7 @@ impl PendingOpen {
     /// Blocking. Waits up to two seconds for a previous thread of the same
     /// pane to release the port, then opens.
     pub fn open(self) -> OpenedPort {
-        let deadline = Instant::now() + SHUTDOWN_WAIT;
-        for handle in self.previous {
-            while !handle.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            if handle.is_finished() {
-                let _ = handle.join();
-            }
-        }
+        join_bounded(self.previous, SHUTDOWN_WAIT);
         let result = (self.opener)(&self.params);
         OpenedPort {
             params: self.params,
@@ -230,6 +224,28 @@ impl PendingOpen {
 }
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+/// How long `close` waits for port threads. The worker wakes at least every
+/// read timeout, so a healthy one ends in a few tens of milliseconds.
+const CLOSE_WAIT: Duration = Duration::from_secs(1);
+
+/// Join the threads that finish within `wait` in total. A thread still
+/// running after that is given up (detached), never waited for. Returns how
+/// many were given up.
+fn join_bounded(handles: Vec<JoinHandle<()>>, wait: Duration) -> usize {
+    let deadline = Instant::now() + wait;
+    let mut given_up = 0;
+    for handle in handles {
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            given_up += 1;
+        }
+    }
+    given_up
+}
 
 /// How a status-line message is drawn (design §5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,8 +451,19 @@ impl Session {
         self.note = None;
     }
 
+    /// Disconnect and wait (up to `CLOSE_WAIT`) until the port thread has
+    /// dropped the port. Use it when the process is about to exit: without
+    /// the wait the OS closes the descriptor first, and on Linux a port that
+    /// was never closed by `serialport` keeps `TIOCEXCL` set. A thread that
+    /// does not finish in time is given up.
     pub fn close(&mut self) {
         self.disconnect();
+        self.join_reaping(CLOSE_WAIT);
+    }
+
+    fn join_reaping(&mut self, wait: Duration) -> usize {
+        let handles = self.reaping.drain(..).map(|(handle, _)| handle).collect();
+        join_bounded(handles, wait)
     }
 
     pub fn link(&self) -> &Link {
@@ -856,6 +883,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.stop_worker();
+        self.join_reaping(CLOSE_WAIT);
         let _ = self.log.command(LogCommand::Stop);
     }
 }
@@ -1884,5 +1912,100 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         panic!("apply was not called");
+    }
+
+    #[test]
+    fn close_releases_the_port_without_tick() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        assert!(!lock(&state).closed);
+        session.close();
+        // No tick, no waiting here: close itself joined the thread.
+        assert!(lock(&state).closed, "the port was not dropped by close");
+        assert!(session.reaping.is_empty());
+    }
+
+    #[test]
+    fn drop_releases_the_port_without_tick() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        drop(session);
+        assert!(lock(&state).closed, "the port was not dropped by Drop");
+    }
+
+    #[test]
+    fn disconnect_stays_non_blocking_and_tick_reaps() {
+        let (state, open) = open_shared(PortState {
+            read_delay: Duration::from_millis(300),
+            ..empty_state()
+        });
+        let mut session = session();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let started = Instant::now();
+        session.disconnect();
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(session.reaping.len(), 1);
+        wait_until(|| {
+            session.tick();
+            session.reaping.is_empty()
+        });
+        assert!(lock(&state).closed);
+    }
+
+    #[test]
+    fn close_gives_up_on_a_stuck_thread() {
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let stuck = thread::spawn(move || {
+            let _ = hold.recv();
+        });
+        let done = thread::spawn(|| {});
+        let started = Instant::now();
+        let given_up = join_bounded(vec![done, stuck], Duration::from_millis(100));
+        assert_eq!(given_up, 1);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let _ = release.send(());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn close_frees_a_pty_slave_that_was_opened_exclusively() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+
+        // The master stays open, so TTY_EXCLUSIVE set on the slave survives
+        // until the slave is closed by `serialport` (TIOCNXCL on drop).
+        let mut master = 0;
+        let mut slave = 0;
+        let mut name = [0 as libc::c_char; 128];
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty");
+        let _master = unsafe { OwnedFd::from_raw_fd(master) };
+        drop(unsafe { OwnedFd::from_raw_fd(slave) });
+        let path = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        let params = SerialParams {
+            path: path.clone(),
+            ..SerialParams::default()
+        };
+
+        let mut session = session();
+        let _rx = session.connect(params.clone()).expect("first open");
+        let second = serial::open_port(&params);
+        assert!(second.is_err(), "a second open must be refused");
+        drop(second);
+
+        session.close();
+        let again = serial::open_port(&params);
+        assert!(again.is_ok(), "the slave stayed busy after close");
     }
 }
