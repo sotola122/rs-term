@@ -180,8 +180,9 @@ impl App {
         let params = self.session.params();
         StatusView {
             prefix: self.prefix_armed,
+            prefix_label: self.prefix.label(),
             port: if params.path.is_empty() {
-                "未選択".into()
+                "no port".into()
             } else {
                 params.path.clone()
             },
@@ -893,7 +894,7 @@ fn log_word(log: &LogSession) -> String {
         LogSession::Stopped => "LOG off".into(),
         LogSession::Running(LogTarget::Text { .. }) => "LOG on".into(),
         LogSession::Running(LogTarget::Binary { .. }) => "LOG bin".into(),
-        LogSession::Failed { .. } => "LOG 失敗".into(),
+        LogSession::Failed { .. } => "LOG failed".into(),
     }
 }
 

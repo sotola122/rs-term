@@ -11,7 +11,7 @@ use rs_term_core::{
 };
 
 use crate::app::{App, ModalBody};
-use crate::status::status_line;
+use crate::status::{status_line, ELLIPSIS};
 
 pub const HELP: &str = "\
 プレフィックス（既定 Ctrl+A）の次のキー
@@ -242,14 +242,14 @@ fn visible_lines(body: &ModalBody, rows: usize) -> Vec<&(String, bool)> {
         .collect()
 }
 
-/// `text` if it fits in `width` cells, otherwise `…` and its tail, so the end
+/// `text` if it fits in `width` cells, otherwise `...` and its tail, so the end
 /// of a long input (where the cursor is) stays visible on one line.
 fn fit_tail(text: &str, width: usize) -> String {
     if Line::from(text).width() <= width {
         return text.to_string();
     }
     let mut tail: Vec<char> = Vec::new();
-    let mut used = 1;
+    let mut used = ELLIPSIS.len();
     for ch in text.chars().rev() {
         let w = Span::raw(ch.to_string()).width();
         if used + w > width {
@@ -258,8 +258,7 @@ fn fit_tail(text: &str, width: usize) -> String {
         used += w;
         tail.push(ch);
     }
-    tail.push('…');
-    tail.iter().rev().collect()
+    format!("{ELLIPSIS}{}", tail.iter().rev().collect::<String>())
 }
 
 /// The help box, sized from `HELP`: widest line plus border and padding by
@@ -358,10 +357,10 @@ mod tests {
     #[test]
     fn fit_tail_keeps_the_end_and_never_splits_a_wide_char() {
         assert_eq!(fit_tail("abc", 5), "abc");
-        assert_eq!(fit_tail("abcdef", 4), "…def");
-        assert_eq!(fit_tail("あいうえお", 6), "…えお");
-        assert_eq!(fit_tail("あいうえお", 5), "…えお");
-        assert_eq!(fit_tail("abc", 0), "…");
+        assert_eq!(fit_tail("abcdef", 5), "...ef");
+        assert_eq!(fit_tail("あいうえお", 7), "...えお");
+        assert_eq!(fit_tail("あいうえお", 6), "...お");
+        assert_eq!(fit_tail("abc", 0), "...");
     }
 
     #[test]
@@ -380,7 +379,7 @@ mod tests {
         let screen = rows(terminal.backend().buffer());
         let row = screen
             .iter()
-            .find(|row| row.contains("> …"))
+            .find(|row| row.contains("> ..."))
             .unwrap_or_else(|| panic!("{screen:#?}"));
         assert!(row.contains("/end.log█"), "{row:?}");
         assert!(Line::from(row.trim_end()).width() <= 80);

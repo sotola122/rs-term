@@ -20,6 +20,11 @@ impl Prefix {
             .unwrap_or(0)
     }
 
+    /// The prefix as shown to the user: "Ctrl+A", "Ctrl+]".
+    pub fn label(self) -> String {
+        format!("Ctrl+{}", self.ctrl.to_ascii_uppercase())
+    }
+
     /// Some terminals report Ctrl+\ and Ctrl+] as Ctrl+4 and Ctrl+5.
     fn digit_alias(self) -> Option<char> {
         match self.ctrl {
