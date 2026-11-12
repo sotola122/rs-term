@@ -199,6 +199,7 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
     let height = (body.lines.len() as u16 + 2).clamp(5, 16);
     let area = centered(frame.area(), 68, height);
     frame.render_widget(Clear, area);
+    let inner = area.width.saturating_sub(2) as usize;
     let lines: Vec<Line> = body
         .lines
         .iter()
@@ -210,13 +211,37 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
             } else {
                 Style::default().fg(Color::Rgb(0xD4, 0xD4, 0xD4))
             };
-            Line::from(Span::styled(text.clone(), style))
+            let text = match text.strip_prefix("> ") {
+                Some(input) => format!("> {}", fit_tail(input, inner.saturating_sub(2))),
+                None => text.clone(),
+            };
+            Line::from(Span::styled(text, style))
         })
         .collect();
     let paragraph = Paragraph::new(lines)
         .block(Block::bordered().title(body.title))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// `text` if it fits in `width` cells, otherwise `…` and its tail, so the end
+/// of a long input (where the cursor is) stays visible on one line.
+fn fit_tail(text: &str, width: usize) -> String {
+    if Line::from(text).width() <= width {
+        return text.to_string();
+    }
+    let mut tail: Vec<char> = Vec::new();
+    let mut used = 1;
+    for ch in text.chars().rev() {
+        let w = Span::raw(ch.to_string()).width();
+        if used + w > width {
+            break;
+        }
+        used += w;
+        tail.push(ch);
+    }
+    tail.push('…');
+    tail.iter().rev().collect()
 }
 
 /// The help box, sized from `HELP`: widest line plus border and padding by
@@ -310,5 +335,36 @@ mod tests {
         let bottom = render_help(80, 10, max + 5);
         assert!(bottom.iter().any(|row| row.contains("Esc で閉じる")));
         assert_eq!(help_max_scroll(Rect::new(0, 0, 80, 24)), 0);
+    }
+
+    #[test]
+    fn fit_tail_keeps_the_end_and_never_splits_a_wide_char() {
+        assert_eq!(fit_tail("abc", 5), "abc");
+        assert_eq!(fit_tail("abcdef", 4), "…def");
+        assert_eq!(fit_tail("あいうえお", 6), "…えお");
+        assert_eq!(fit_tail("あいうえお", 5), "…えお");
+        assert_eq!(fit_tail("abc", 0), "…");
+    }
+
+    #[test]
+    fn a_long_modal_input_stays_on_one_line_with_its_tail_visible() {
+        let long = format!("/very/long/{}/end.log█", "d".repeat(100));
+        let body = ModalBody {
+            title: "ログ開始",
+            lines: vec![
+                ("ログファイルのパス".into(), false),
+                (format!("> {long}"), false),
+            ],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw_modal(frame, &body)).unwrap();
+        let screen = rows(terminal.backend().buffer());
+        let row = screen
+            .iter()
+            .find(|row| row.contains("> …"))
+            .unwrap_or_else(|| panic!("{screen:#?}"));
+        assert!(row.contains("/end.log█"), "{row:?}");
+        assert!(Line::from(row.trim_end()).width() <= 80);
+        assert_eq!(screen.iter().filter(|row| row.contains("ddd")).count(), 1);
     }
 }

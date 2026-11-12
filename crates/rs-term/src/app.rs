@@ -657,8 +657,11 @@ impl App {
     fn set_baud(&mut self, baud: u32) {
         let mut params = self.session.params().clone();
         params.baud_rate = baud;
-        if let Err(error) = self.session.set_serial_params(params) {
-            self.session.set_message(Message::error(error.to_string()));
+        match self.session.set_serial_params(params) {
+            Ok(()) => self
+                .session
+                .set_message(Message::info(baud_changed_text(baud))),
+            Err(error) => self.session.set_message(Message::error(error.to_string())),
         }
     }
 
@@ -791,6 +794,10 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
     }
 }
 
+fn baud_changed_text(baud: u32) -> String {
+    format!("ボーレートを {baud} にした")
+}
+
 fn frame_text(params: &SerialParams) -> String {
     let mut text = format!(
         "{} {}{}{}",
@@ -867,6 +874,11 @@ fn encoding_token(encoding: SessionEncoding) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn baud_change_has_a_confirmation_text() {
+        assert_eq!(baud_changed_text(9600), "ボーレートを 9600 にした");
+    }
 
     #[test]
     fn startup_messages_are_joined_with_the_highest_severity() {
