@@ -49,6 +49,7 @@ pub struct App {
     prefix: Prefix,
     prefix_armed: bool,
     help: bool,
+    help_scroll: usize,
     modal: Option<Modal>,
     input: String,
     modal_error: Option<String>,
@@ -99,6 +100,7 @@ impl App {
             prefix: cli.prefix,
             prefix_armed: false,
             help: false,
+            help_scroll: 0,
             modal: None,
             input: String::new(),
             modal_error: None,
@@ -131,6 +133,25 @@ impl App {
 
     pub fn show_help(&self) -> bool {
         self.help
+    }
+
+    pub fn help_scroll(&self) -> usize {
+        self.help_scroll
+    }
+
+    fn scroll_help(&mut self, up: bool, page: bool) {
+        let area = ratatui::layout::Rect::new(0, 0, self.size.0, self.size.1);
+        let step = if page {
+            crate::view::help_geometry(area).1.max(1)
+        } else {
+            1
+        };
+        let max = crate::view::help_max_scroll(area);
+        self.help_scroll = if up {
+            self.help_scroll.saturating_sub(step)
+        } else {
+            (self.help_scroll + step).min(max)
+        };
     }
 
     pub fn palette(&self) -> &TerminalPalette {
@@ -277,6 +298,7 @@ impl App {
             match keys::classify(&key, self.prefix, Focus::Help) {
                 Action::Run(Command::Quit) => self.quit = true,
                 Action::Run(Command::Cancel) => self.help = false,
+                Action::Scroll { up, page } => self.scroll_help(up, page),
                 _ => {}
             }
             return;
@@ -395,7 +417,10 @@ impl App {
                 Modal::Encoding,
                 encoding_token(self.session.encoding()).into(),
             ),
-            Command::Help => self.help = true,
+            Command::Help => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
             Command::Quit => self.quit = true,
             Command::Paste => self.paste_clipboard(),
             Command::Cancel => {

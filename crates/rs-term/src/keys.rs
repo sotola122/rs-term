@@ -62,6 +62,14 @@ pub fn classify(key: &KeyEvent, prefix: Prefix, focus: Focus) -> Action {
         Focus::Help => match key.code {
             KeyCode::Esc | KeyCode::Char('?') => Action::Run(Command::Cancel),
             KeyCode::Char('q') => Action::Run(Command::Quit),
+            KeyCode::Up | KeyCode::PageUp => Action::Scroll {
+                up: true,
+                page: key.code == KeyCode::PageUp,
+            },
+            KeyCode::Down | KeyCode::PageDown => Action::Scroll {
+                up: false,
+                page: key.code == KeyCode::PageDown,
+            },
             _ => Action::Ignore,
         },
         Focus::Prefix => prefix_action(key, prefix),
@@ -310,5 +318,27 @@ mod tests {
         let mut release = ctrl_a;
         release.kind = KeyEventKind::Release;
         assert_eq!(classify(&release, prefix, Focus::Terminal), Action::Ignore);
+    }
+
+    #[test]
+    fn help_scrolls_with_up_down_and_pages() {
+        let prefix = Prefix::default();
+        let scroll = |code| classify(&key(code, KeyModifiers::empty()), prefix, Focus::Help);
+        assert_eq!(
+            scroll(KeyCode::Up),
+            Action::Scroll {
+                up: true,
+                page: false
+            }
+        );
+        assert_eq!(
+            scroll(KeyCode::PageDown),
+            Action::Scroll {
+                up: false,
+                page: true
+            }
+        );
+        assert_eq!(scroll(KeyCode::Esc), Action::Run(Command::Cancel));
+        assert_eq!(scroll(KeyCode::Char('?')), Action::Run(Command::Cancel));
     }
 }
