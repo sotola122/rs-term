@@ -15,13 +15,16 @@ pub struct TermGuard;
 impl TermGuard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
+        // From here the guard exists, so a failure below drops it and
+        // `restore_terminal` undoes whatever was already switched on.
+        let guard = Self;
         execute!(
             stdout(),
             EnterAlternateScreen,
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
-        Ok(Self)
+        Ok(guard)
     }
 }
 
