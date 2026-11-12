@@ -872,6 +872,23 @@ text_encoding = "utf-8"
     }
 
     #[test]
+    fn the_readme_settings_example_loads() {
+        // A checkout may use CRLF line endings.
+        let readme = include_str!("../../../README.md").replace("\r\n", "\n");
+        let block = readme
+            .split_once("```toml\n")
+            .and_then(|(_, rest)| rest.split_once("```"))
+            .map(|(block, _)| block)
+            .expect("README has a toml block");
+        let loaded = load_settings_str(block).expect("README example must load");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.serial.baud_rate, 115_200);
+        assert_eq!(loaded.terminal.scrollback, 10_000);
+        // The README says these values are the built-in defaults.
+        assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
     fn unknown_key_rejects_the_file() {
         let text = SAMPLE.replace("ligatures = false", "ligatures = false\nextra = 1");
         assert!(load_settings_str(&text).is_err());
@@ -893,7 +910,7 @@ text_encoding = "utf-8"
 
     #[test]
     fn layout_is_not_a_core_setting() {
-        // The pane tree lives in the UI crate's layout.toml (§5.7).
+        // Layout belongs to the terminal multiplexer, not to rs-term.
         let text = format!("{SAMPLE}\n[layout]\n");
         assert!(load_settings_str(&text).is_err());
     }

@@ -1,4 +1,4 @@
-//! Domain errors. Every `Display` is the Japanese text the pane status line
+//! Domain errors. Every `Display` is the Japanese text the status line
 //! shows. OS text, when there is any, stays in parentheses after it.
 
 use std::fmt;
@@ -35,9 +35,9 @@ pub enum SessionError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogError {
     NotRunning,
-    /// Another pane or process holds the file.
+    /// Another process holds the file.
     Busy,
-    /// This pane already logs to a different file.
+    /// This session already logs to a different file.
     AlreadyRunning,
     InvalidName(String),
     Io {
@@ -48,7 +48,10 @@ pub enum LogError {
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::AlreadyOpen => write!(f, "すでに接続している。先に「切断」"),
+            OpenError::AlreadyOpen => write!(
+                f,
+                "すでに接続している。先にプレフィックスの次の d で切断する"
+            ),
             OpenError::Cancelled => write!(f, "接続を取り消した"),
             OpenError::Port(error) => write!(f, "{error}"),
         }
@@ -149,6 +152,15 @@ mod tests {
         ];
         for message in messages {
             assert!(has_japanese(&message), "{message}");
+        }
+    }
+
+    #[test]
+    fn messages_point_at_tui_controls_not_gui_ones() {
+        let text = OpenError::AlreadyOpen.to_string();
+        assert!(text.contains("プレフィックスの次の d"), "{text}");
+        for word in ["ペイン", "パレット", "メニュー", "ボタン", "「切断」"] {
+            assert!(!text.contains(word), "{text}");
         }
     }
 }

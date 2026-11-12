@@ -21,7 +21,7 @@ use crate::redraw::RedrawGate;
 use crate::term::TermGuard;
 
 fn main() {
-    let cli = match cli::parse(std::env::args().skip(1)) {
+    let cli = match cli::parse_os(std::env::args_os().skip(1)) {
         Ok(cli) => cli,
         Err(error) => {
             eprintln!("{error}");
@@ -66,5 +66,7 @@ fn run(cli: cli::Cli) -> io::Result<()> {
             dirty = true;
         }
     }
+    // Close the port before `terminal` and `_guard` are dropped.
+    app.shutdown();
     Ok(())
 }

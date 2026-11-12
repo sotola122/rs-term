@@ -1743,6 +1743,7 @@ dependencies = [
  "encoding_rs",
  "futures",
  "futures-channel",
+ "libc",
  "serde",
  "serialport",
  "toml",
