@@ -353,9 +353,9 @@ fn map_open_error(path: &str, error: serialport::Error) -> PortError {
 
 /// True for the errors a port held by another process gives on Windows:
 /// `PermissionDenied`, or raw OS error 5 (`ERROR_ACCESS_DENIED`).
+#[cfg(windows)]
 pub(crate) fn is_access_denied(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::PermissionDenied
-        || (cfg!(windows) && error.raw_os_error() == Some(5))
+    error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(5)
 }
 
 #[cfg(windows)]
@@ -816,17 +816,15 @@ mod tests {
         assert!(!missing.contains("使用中"), "{missing}");
     }
 
+    #[cfg(windows)]
     #[test]
     fn access_denied_is_detected_by_code_not_text() {
         assert!(is_access_denied(&io::Error::from(
             io::ErrorKind::PermissionDenied
         )));
         assert!(!is_access_denied(&io::Error::from(io::ErrorKind::NotFound)));
-        #[cfg(windows)]
-        {
-            assert!(is_access_denied(&io::Error::from_raw_os_error(5)));
-            assert!(!is_access_denied(&io::Error::from_raw_os_error(2)));
-        }
+        assert!(is_access_denied(&io::Error::from_raw_os_error(5)));
+        assert!(!is_access_denied(&io::Error::from_raw_os_error(2)));
     }
 
     #[cfg(windows)]
