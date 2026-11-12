@@ -214,7 +214,7 @@ impl App {
                 }
                 let paths = self.filtered_ports();
                 if paths.is_empty() && self.input.is_empty() {
-                    lines.push(("ポートが無い。パスを入力して Enter".into(), false));
+                    lines.push(("No ports found. Type a path and press Enter".into(), false));
                 }
                 pinned = Some(lines.len());
                 for (index, path) in paths.iter().enumerate() {
@@ -223,32 +223,35 @@ impl App {
                         index == self.picker_index.min(paths.len().saturating_sub(1)),
                     ));
                 }
-                "ポート"
+                "Port"
             }
             Modal::SendString => {
-                lines.push(("送る文字列。Enter で送信改行を足す".into(), false));
+                lines.push((
+                    "Text to send. Enter adds the transmit newline".into(),
+                    false,
+                ));
                 lines.push((format!("> {}█", self.input), false));
-                "文字列を送る"
+                "Send string"
             }
             Modal::SendFile => {
-                lines.push(("送るファイルのパス".into(), false));
+                lines.push(("Path of the file to send".into(), false));
                 lines.push((format!("> {}█", self.input), false));
-                "ファイルを送る"
+                "Send file"
             }
             Modal::LogPath => {
-                lines.push(("ログファイルのパス".into(), false));
+                lines.push(("Path of the log file".into(), false));
                 lines.push((format!("> {}█", self.input), false));
-                "ログ開始"
+                "Start log"
             }
             Modal::Baud => {
-                lines.push(("ボーレート（1〜4000000）".into(), false));
+                lines.push(("Baud rate (1 to 4000000)".into(), false));
                 lines.push((format!("> {}█", self.input), false));
-                "ボーレート"
+                "Baud rate"
             }
             Modal::Encoding => {
-                lines.push(("sjis または utf8".into(), false));
+                lines.push(("sjis or utf8".into(), false));
                 lines.push((format!("> {}█", self.input), false));
-                "エンコーディング"
+                "Encoding"
             }
         };
         let pinned = pinned.unwrap_or(lines.len());
@@ -434,7 +437,7 @@ impl App {
             Command::Connect => self.connect_command(),
             Command::Disconnect => {
                 self.disconnect();
-                self.session.set_message(Message::info("切断した"));
+                self.session.set_message(Message::info("Disconnected"));
             }
             Command::Reconnect => self.reconnect(),
             Command::Break => self.send_input(Input::Break { hold: BREAK_HOLD }),
@@ -496,7 +499,7 @@ impl App {
     fn ask_log(&mut self) {
         if matches!(self.session.log_state(), LogSession::Running(_)) {
             self.session
-                .set_message(Message::error("すでにログ中。先にログを停止"));
+                .set_message(Message::error("Already logging; stop logging first"));
             return;
         }
         let dir = log_dir_from_env(&self.settings.log.directory);
@@ -510,7 +513,7 @@ impl App {
 
     fn stop_log(&mut self) {
         match self.session.log(LogCommand::Stop) {
-            Ok(()) => self.session.set_message(Message::info("ログを停止した")),
+            Ok(()) => self.session.set_message(Message::info("Log stopped")),
             Err(error) => self.session.set_message(Message::error(error.to_string())),
         }
     }
@@ -520,7 +523,7 @@ impl App {
             Some(text) => self.send_input(Input::Text(text)),
             None => self
                 .session
-                .set_message(Message::error("クリップボードを読めない")),
+                .set_message(Message::error("Cannot read the clipboard")),
         }
     }
 
@@ -560,7 +563,7 @@ impl App {
             }
             Modal::SendFile => {
                 if input.is_empty() {
-                    self.modal_error = Some("パスが空".into());
+                    self.modal_error = Some("Path is empty".into());
                     return;
                 }
                 self.close_modal();
@@ -568,7 +571,7 @@ impl App {
             }
             Modal::LogPath => {
                 if input.is_empty() {
-                    self.modal_error = Some("パスが空".into());
+                    self.modal_error = Some("Path is empty".into());
                     return;
                 }
                 self.close_modal();
@@ -586,8 +589,9 @@ impl App {
                 Ok(encoding) => {
                     self.close_modal();
                     self.session.set_encoding(encoding);
+                    let label = self.session.encoding().label();
                     self.session
-                        .set_message(Message::info("エンコーディングを変えた"));
+                        .set_message(Message::info(format!("Encoding set to {label}")));
                 }
                 Err(error) => self.modal_error = Some(error),
             },
@@ -644,7 +648,7 @@ impl App {
             }) {
             Ok(_) => self.opening = Some(rx),
             Err(error) => self.session.set_message(Message::error(format!(
-                "接続スレッドを作れない（OS: {error}）"
+                "Cannot start the connect thread (OS: {error})"
             ))),
         }
     }
@@ -677,7 +681,7 @@ impl App {
             Err(TryRecvError::Disconnected) => {
                 self.opening = None;
                 self.session
-                    .set_message(Message::error("接続スレッドが終了した"));
+                    .set_message(Message::error("Connect thread ended unexpectedly"));
             }
         }
     }
@@ -695,6 +699,7 @@ impl App {
 
     /// Starts the text log and reports the outcome; the caller shows it.
     fn start_log(&mut self, path: PathBuf) -> Message {
+        let path_text = path.display().to_string();
         let result = self.session.log(LogCommand::Start(LogTarget::Text {
             path,
             append: false,
@@ -708,7 +713,7 @@ impl App {
             timestamp: None,
         }));
         match result {
-            Ok(()) => Message::info("ログを開始した"),
+            Ok(()) => Message::info(format!("Log started: {path_text}")),
             Err(error) => Message::error(error.to_string()),
         }
     }
@@ -786,7 +791,10 @@ fn load_settings() -> (Settings, Option<String>) {
     }
     match load_settings_file(&path) {
         Ok(settings) => (settings, None),
-        Err(error) => (Settings::default(), Some(error)),
+        Err(error) => (
+            Settings::default(),
+            Some(format!("Cannot load settings.toml: {error}")),
+        ),
     }
 }
 
@@ -806,10 +814,10 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
 /// is accepted: FIFOs and devices report a length of 0 and never end, and a
 /// file can grow after the length check, so the read itself is capped too.
 fn read_send_file(path: &Path) -> Result<Vec<u8>, String> {
-    let read_error = |error: std::io::Error| format!("ファイルを読めない（OS: {error}）");
+    let read_error = |error: std::io::Error| format!("Cannot read the file (OS: {error})");
     let meta = std::fs::metadata(path).map_err(read_error)?;
     if !meta.is_file() {
-        return Err("通常のファイルではないので送らなかった".into());
+        return Err("Not a regular file; not sent".into());
     }
     if meta.len() > MAX_PENDING as u64 {
         return Err(too_large(meta.len() as usize));
@@ -824,7 +832,7 @@ fn read_at_most(reader: impl Read, limit: usize) -> Result<Option<Vec<u8>>, Stri
     reader
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("ファイルを読めない（OS: {error}）"))?;
+        .map_err(|error| format!("Cannot read the file (OS: {error})"))?;
     Ok((bytes.len() <= limit).then_some(bytes))
 }
 
@@ -837,7 +845,7 @@ fn too_large(bytes: usize) -> String {
 }
 
 fn baud_changed_text(baud: u32) -> String {
-    format!("ボーレートを {baud} にした")
+    format!("Baud rate set to {baud}")
 }
 
 fn frame_text(params: &SerialParams) -> String {
@@ -921,9 +929,9 @@ mod tests {
     fn send_file_rejects_a_directory_and_a_missing_path() {
         let dir = temp_dir("send-dir");
         let error = read_send_file(&dir).unwrap_err();
-        assert!(error.contains("通常のファイルではない"), "{error}");
+        assert!(error.contains("Not a regular file"), "{error}");
         let error = read_send_file(&dir.join("none")).unwrap_err();
-        assert!(error.contains("ファイルを読めない"), "{error}");
+        assert!(error.contains("Cannot read the file"), "{error}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -949,32 +957,32 @@ mod tests {
 
     #[test]
     fn baud_change_has_a_confirmation_text() {
-        assert_eq!(baud_changed_text(9600), "ボーレートを 9600 にした");
+        assert_eq!(baud_changed_text(9600), "Baud rate set to 9600");
     }
 
     #[test]
     fn startup_messages_are_joined_with_the_highest_severity() {
         let combined = combine_startup(vec![
-            Message::info("ログを開始した"),
-            Message::warn("注意の理由"),
-            Message::error("壊れている"),
+            Message::info("Log started: run.log"),
+            Message::warn("careful"),
+            Message::error("broken"),
         ])
         .unwrap();
         assert_eq!(combined.severity, Severity::Error);
-        assert_eq!(combined.text, "ログを開始した  注意の理由  壊れている");
+        assert_eq!(combined.text, "Log started: run.log  careful  broken");
         assert!(combine_startup(Vec::new()).is_none());
-        let only_info = combine_startup(vec![Message::info("ログを開始した")]).unwrap();
+        let only_info = combine_startup(vec![Message::info("Log started: run.log")]).unwrap();
         assert_eq!(only_info.severity, Severity::Info);
     }
 
     #[test]
     fn a_connect_keeps_the_startup_message_unless_something_replaced_it() {
-        let startup = Message::error("設定が壊れている");
+        let startup = Message::error("Cannot load settings.toml: bad");
         assert_eq!(
             keep_startup(Some(&startup), Some(&startup)),
             Some(startup.clone())
         );
-        let open_error = Message::error("COM1 を開けない");
+        let open_error = Message::error("COM1: Port not found");
         assert_eq!(keep_startup(Some(&open_error), Some(&startup)), None);
         assert_eq!(keep_startup(None, Some(&startup)), None);
         assert_eq!(keep_startup(Some(&startup), None), None);
@@ -988,14 +996,14 @@ mod tests {
             ..Cli::default()
         };
         let settings = Settings {
-            warnings: vec!["未知の項目".into()],
+            warnings: vec!["Ignored unused settings: ui".into()],
             ..Settings::default()
         };
-        let app = App::with_settings(cli, settings, Some("settings.toml が壊れている".into()));
+        let app = App::with_settings(cli, settings, Some("Cannot load settings.toml: bad".into()));
         let (severity, text) = app.status_view().message.unwrap();
         assert_eq!(severity, Severity::Error);
-        assert!(text.contains("settings.toml が壊れている"), "{text}");
-        assert!(!text.contains("ログを開始した"), "{text}");
+        assert!(text.contains("Cannot load settings.toml: bad"), "{text}");
+        assert!(!text.contains("Log started"), "{text}");
         assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
     }
 
