@@ -10,7 +10,7 @@ mod status;
 mod term;
 mod view;
 
-use std::io::{self, stdout};
+use std::io::{self, stdout, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, MouseEventKind};
@@ -34,7 +34,8 @@ fn main() {
         return;
     }
     if let Err(error) = run(cli) {
-        eprintln!("終了できない（OS: {error}）");
+        // `eprintln!` panics when stderr is a terminal that has gone away.
+        let _ = writeln!(io::stderr(), "終了できない（OS: {error}）");
         std::process::exit(1);
     }
 }
@@ -46,6 +47,26 @@ fn run(cli: cli::Cli) -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let _ = terminal.hide_cursor();
     let mut app = App::new(cli);
+    let result = event_loop(&mut terminal, &mut app);
+    // Close the port before `terminal` and `_guard` are dropped, on every
+    // way out, so a failed draw cannot leave the port held.
+    app.shutdown();
+    // ratatui shows the cursor in its `Drop` and `eprintln!`s a failure, which
+    // panics when the terminal is already gone (SIGHUP). Do it here and skip
+    // the drop.
+    let _ = terminal.show_cursor();
+    std::mem::forget(terminal);
+    match result {
+        // A terminal that hung up is a quit, not a failure.
+        Err(error) if signal::terminal_gone(&error) => Ok(()),
+        other => other,
+    }
+}
+
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> io::Result<()> {
     let size = terminal.size()?;
     app.on_resize(size.width, size.height);
     let mut gate = RedrawGate::default();
@@ -53,7 +74,7 @@ fn run(cli: cli::Cli) -> io::Result<()> {
     while !app.should_quit() {
         dirty |= app.drain_serial();
         if gate.should_draw(dirty, app.status_view(), Instant::now()) {
-            terminal.draw(|frame| view::draw(frame, &app))?;
+            terminal.draw(|frame| view::draw(frame, app))?;
             dirty = false;
         }
         if signal::wait_event(Duration::from_millis(10))? {
@@ -68,12 +89,5 @@ fn run(cli: cli::Cli) -> io::Result<()> {
             dirty = true;
         }
     }
-    // Close the port before `terminal` and `_guard` are dropped.
-    app.shutdown();
-    // ratatui shows the cursor in its `Drop` and `eprintln!`s a failure, which
-    // panics when the terminal is already gone (SIGHUP). Do it here and skip
-    // the drop.
-    let _ = terminal.show_cursor();
-    std::mem::forget(terminal);
     Ok(())
 }

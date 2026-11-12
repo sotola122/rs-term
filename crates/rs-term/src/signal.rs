@@ -16,6 +16,20 @@ pub fn requested() -> bool {
     TERMINATE.load(Ordering::Relaxed)
 }
 
+/// True when `error` means the terminal is gone (it hung up, or a signal
+/// asked for the quit), so the caller should shut down quietly.
+pub fn terminal_gone(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EIO | libc::ENXIO | libc::EBADF)
+    ) {
+        return true;
+    }
+    let _ = error;
+    requested()
+}
+
 #[cfg(unix)]
 extern "C" fn on_signal(_signal: libc::c_int) {
     // An atomic store is async-signal-safe.
@@ -100,4 +114,15 @@ pub fn install() -> io::Result<()> {
 #[cfg(test)]
 pub fn request_for_test(on: bool) {
     TERMINATE.store(on, Ordering::Relaxed);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dead_terminal_is_not_an_error() {
+        assert!(terminal_gone(&io::Error::from_raw_os_error(libc::EIO)));
+        assert!(terminal_gone(&io::Error::from_raw_os_error(libc::ENXIO)));
+    }
 }
