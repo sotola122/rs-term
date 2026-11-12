@@ -216,8 +216,8 @@ impl PendingOpen {
         &self.params
     }
 
-    /// Blocking. Waits up to two seconds for a previous thread of the same
-    /// pane to release the port, then opens.
+    /// Blocking. Waits up to two seconds for a previous thread of the previous
+    /// connection to release the port, then opens.
     pub fn open(self) -> OpenedPort {
         join_bounded(self.previous, SHUTDOWN_WAIT);
         let result = (self.opener)(&self.params);
@@ -264,7 +264,7 @@ pub enum Severity {
     Error,
 }
 
-/// One message for the status line of a pane.
+/// One message for the status line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub severity: Severity,
@@ -447,7 +447,7 @@ impl Session {
         self.pins = None;
     }
 
-    /// Reset to the state of a new pane: disconnected, no port name, log
+    /// Reset to the state of a new session: disconnected, no port name, log
     /// stopped. The screen stays (§5.3: the user clears it).
     pub fn reset_to_unconnected(&mut self) {
         self.disconnect();

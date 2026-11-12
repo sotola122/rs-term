@@ -1,6 +1,6 @@
 //! Serial sessions for rs-term.
 //!
-//! This crate does not depend on GPUI. The pane tree lives in the shell.
+//! This crate does not depend on GPUI. The frontend (rs-term) owns the one session and all UI.
 
 mod codec;
 mod config;

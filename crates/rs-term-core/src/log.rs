@@ -103,7 +103,7 @@ impl Default for LogEngine {
 }
 
 impl Drop for LogEngine {
-    /// Closing a pane or quitting writes the buffer first (review N5).
+    /// Closing the session or quitting writes the buffer first (review N5).
     fn drop(&mut self) {
         let _ = self.flush();
         self.release_files();
@@ -680,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn a_second_target_in_the_same_pane_is_already_running() {
+    fn a_second_target_in_the_same_session_is_already_running() {
         let dir = temp_dir("log-twice");
         let mut log = LogEngine::default();
         log.command(LogCommand::Start(text_target(&dir.join("a.log"), None)))

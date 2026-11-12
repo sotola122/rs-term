@@ -893,7 +893,7 @@ text_encoding = "utf-8"
 
     #[test]
     fn layout_is_not_a_core_setting() {
-        // The pane tree lives in the UI crate's layout.toml (§5.7).
+        // Layout belongs to the terminal multiplexer, not to rs-term.
         let text = format!("{SAMPLE}\n[layout]\n");
         assert!(load_settings_str(&text).is_err());
     }
