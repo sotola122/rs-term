@@ -148,7 +148,7 @@ Behavior:
 - Every table and key is optional. A key you omit takes its built-in default, so an empty file is valid and a file may contain only the keys you want to change.
 - Otherwise the schema is strict. A `schema` other than `1`, an unknown key, a syntax error, or an out-of-range number rejects the whole file.
 - Exception: an unknown `terminal.palette` falls back to `classic-dark` with a warning, and the rest of the file still loads.
-- Legacy keys from older versions are accepted and ignored, with a warning on the status line (`Ignored unused settings: ui, serial.reconnect`): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
+- Legacy keys from older versions are accepted and silently ignored (no message): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
 
 A complete `settings.toml` that lists every key (these values are the built-in defaults; you can delete any line):
 

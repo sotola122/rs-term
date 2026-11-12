@@ -3,11 +3,9 @@
 //! Every table and key is optional; an omitted one takes the built-in default.
 //! A schema other than 1, an unknown key, a syntax error, or an out-of-range
 //! number rejects the whole file. The file is not rewritten.
-//! Two things do not reject the file. An unknown `terminal.palette` falls back
-//! and is reported. The GUI-era keys the TUI never used (`serial.reconnect`,
-//! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` and `[layout]`
-//! tables) are ignored
-//! and reported in one warning.
+//! An unknown `terminal.palette` falls back and is reported. The GUI-era keys
+//! the TUI never used (`serial.reconnect`, `serial.reopen_on_start`,
+//! `terminal.font_*`, the `[ui]` and `[layout]` tables) are ignored silently.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -249,7 +247,7 @@ impl Default for Settings {
 
 /// Every table and key is optional: an omitted one takes the built-in
 /// default. The GUI-era keys the TUI never read are still accepted (and
-/// ignored) so an old file keeps loading; they are listed in a warning.
+/// silently ignored) so an old file keeps loading.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSettings {
@@ -264,7 +262,9 @@ struct RawSettings {
     terminal: RawTerminal,
     #[serde(default)]
     log: RawLog,
+    #[allow(dead_code)] // accepted and ignored
     ui: Option<IgnoredAny>,
+    #[allow(dead_code)] // accepted and ignored
     layout: Option<IgnoredAny>,
 }
 
@@ -279,7 +279,9 @@ struct RawSerial {
     dtr: Option<String>,
     rts: Option<String>,
     read_timeout_ms: Option<u64>,
+    #[allow(dead_code)] // accepted and ignored
     reconnect: Option<IgnoredAny>,
+    #[allow(dead_code)] // accepted and ignored
     reopen_on_start: Option<IgnoredAny>,
 }
 
@@ -305,8 +307,11 @@ struct RawTerminal {
     local_echo: Option<bool>,
     palette: Option<String>,
     ambiguous_width: Option<String>,
+    #[allow(dead_code)] // accepted and ignored
     font_family: Option<IgnoredAny>,
+    #[allow(dead_code)] // accepted and ignored
     font_size_px: Option<IgnoredAny>,
+    #[allow(dead_code)] // accepted and ignored
     font_fallbacks: Option<IgnoredAny>,
 }
 
@@ -501,21 +506,6 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
         return Err("log.text_encoding must be utf-8".into());
     }
     let mut warnings = Vec::new();
-    let legacy: Vec<&str> = [
-        ("serial.reconnect", serial.reconnect.is_some()),
-        ("serial.reopen_on_start", serial.reopen_on_start.is_some()),
-        ("terminal.font_family", terminal.font_family.is_some()),
-        ("terminal.font_size_px", terminal.font_size_px.is_some()),
-        ("terminal.font_fallbacks", terminal.font_fallbacks.is_some()),
-        ("ui", raw.ui.is_some()),
-        ("layout", raw.layout.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(name, present)| present.then_some(name))
-    .collect();
-    if !legacy.is_empty() {
-        warnings.push(format!("Ignored unused settings: {}", legacy.join(", ")));
-    }
     let mut palette = terminal.palette.unwrap_or(d.terminal.palette);
     if palette_by_name(&palette).is_none() {
         warnings.push(format!(
@@ -817,7 +807,7 @@ parity = \"mark\"
     }
 
     #[test]
-    fn legacy_gui_keys_load_with_one_warning() {
+    fn legacy_gui_keys_load_silently() {
         let text = format!(
             "{}
 [ui]
@@ -840,31 +830,12 @@ font_fallbacks = [\"a\"]"
                 )
         );
         let loaded = load_settings_str(&text).unwrap();
-        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-        let warning = &loaded.warnings[0];
-        assert!(
-            warning.starts_with("Ignored unused settings: "),
-            "{warning}"
-        );
-        for key in [
-            "serial.reconnect",
-            "serial.reopen_on_start",
-            "terminal.font_family",
-            "terminal.font_size_px",
-            "terminal.font_fallbacks",
-            "ui",
-        ] {
-            assert!(warning.contains(key), "{warning}");
-        }
-        let expected = Settings {
-            warnings: loaded.warnings.clone(),
-            ..Settings::default()
-        };
-        assert_eq!(loaded, expected);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded, Settings::default());
     }
 
     #[test]
-    fn the_old_layout_tables_are_ignored_and_named() {
+    fn the_old_layout_tables_are_ignored_silently() {
         let text = format!(
             "{}
 [layout.tree]
@@ -880,12 +851,7 @@ id = 2
         );
         let loaded = load_settings_str(&text).unwrap();
         assert_eq!(loaded.serial.baud_rate, 9600);
-        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-        assert!(
-            loaded.warnings[0].ends_with("layout"),
-            "{:?}",
-            loaded.warnings
-        );
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     }
 
     #[test]
