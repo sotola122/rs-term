@@ -1,0 +1,40 @@
+name: Setup
+description: Install the Linux libraries, the repo Rust toolchain, and rust-cache.
+
+inputs:
+  targets:
+    description: Extra rustup targets, space-separated
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Linux system packages
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          pkg-config \
+          libudev-dev
+
+    # The toolchain is read from rust-toolchain.toml, the one place the
+    # version is written (review N23). rustup then selects it in this repo.
+    - name: Install the repo toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+        test -n "$channel"
+        rustup toolchain install "$channel" --profile minimal --component clippy,rustfmt
+        rustup default "$channel"
+
+    - name: Add Rust targets
+      if: ${{ inputs.targets != '' }}
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+      run: rustup target add $TARGETS
+
+    - uses: Swatinem/rust-cache@v2

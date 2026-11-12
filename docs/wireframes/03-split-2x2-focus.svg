@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740">
+<title>2×2、右下にフォーカス、PREFIX 待ち（s4）</title>
+<rect x="0" y="0" width="1200" height="740" fill="#3b3d45" rx="0"/>
+<rect x="0" y="0" width="1200" height="32" fill="#f3f3f3" rx="0"/>
+<text x="12" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="13" fill="#222" font-weight="normal" text-anchor="start" xml:space="preserve">rs-term</text>
+<text x="1080" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">—</text>
+<text x="1126" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">☐</text>
+<text x="1172" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">✕</text>
+<text x="1192" y="734" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="10" fill="#9aa0aa" font-weight="normal" text-anchor="end" xml:space="preserve">OS キャプション（上 32px）は実装では描かない</text>
+<clipPath id="p4"><rect x="0" y="32" width="599" height="353"/></clipPath>
+<g clip-path="url(#p4)">
+<rect x="0" y="32" width="599" height="353" fill="#1e1f24" rx="0"/>
+<text x="10" y="54" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">ESP-ROM:esp32s3-20210327</text>
+<text x="10" y="73" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)</text>
+<text x="10" y="92" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#56b6c2" font-weight="normal" text-anchor="start" xml:space="preserve">esp&gt;</text>
+<text x="40.8" y="92" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve"> status</text>
+<rect x="0" y="361" width="599" height="24" fill="#2a2c33" rx="0"/>
+<line x1="0" y1="361.5" x2="599" y2="361.5" stroke="#3b3d45" stroke-width="1"/>
+<circle cx="14" cy="373" r="4" fill="#57c25a"/>
+<text x="23" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">COM3</text>
+<text x="65.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">115200 8N1</text>
+<text x="151.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Flow: None</text>
+<text x="237.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">UTF-8</text>
+<text x="287.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#e06c75" font-weight="normal" text-anchor="start" xml:space="preserve">● LOG text 00:02:51</text>
+</g>
+<clipPath id="p5"><rect x="601" y="32" width="599" height="353"/></clipPath>
+<g clip-path="url(#p5)">
+<rect x="601" y="32" width="599" height="353" fill="#1e1f24" rx="0"/>
+<text x="611" y="54" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">RP2354B boot ROM</text>
+<text x="611" y="73" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">[    0.000] clk_sys = 150 MHz</text>
+<text x="611" y="92" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">[    0.002] usb: enumerated as CDC</text>
+<text x="611" y="111" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#e06c75" font-weight="normal" text-anchor="start" xml:space="preserve">[    0.131] i2c0: no ACK from 0x48</text>
+<text x="611" y="130" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">[    0.140] main loop</text>
+<text x="611" y="149" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">&gt; █</text>
+<rect x="601" y="361" width="599" height="24" fill="#2a2c33" rx="0"/>
+<line x1="601" y1="361.5" x2="1200" y2="361.5" stroke="#3b3d45" stroke-width="1"/>
+<circle cx="615" cy="373" r="4" fill="#57c25a"/>
+<text x="624" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">COM7</text>
+<text x="666.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">921600 8N1</text>
+<text x="752.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Flow: RTS/CTS（送信のみ）</text>
+<text x="946.8" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Shift_JIS</text>
+<text x="1025.6" y="377" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">LOG off</text>
+</g>
+<clipPath id="p6"><rect x="0" y="387" width="599" height="353"/></clipPath>
+<g clip-path="url(#p6)">
+<rect x="0" y="387" width="599" height="353" fill="#1e1f24" rx="0"/>
+<text x="10" y="409" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">OT-BR agent</text>
+<text x="10" y="428" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">thread state: leader</text>
+<text x="10" y="447" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#e5c07b" font-weight="normal" text-anchor="start" xml:space="preserve">W: partition id changed</text>
+<text x="10" y="466" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#d6d6d6" font-weight="normal" text-anchor="start" xml:space="preserve">&gt; █</text>
+<rect x="0" y="716" width="599" height="24" fill="#2a2c33" rx="0"/>
+<line x1="0" y1="716.5" x2="599" y2="716.5" stroke="#3b3d45" stroke-width="1"/>
+<circle cx="14" cy="728" r="4" fill="#57c25a"/>
+<text x="23" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">COM12</text>
+<text x="73.0" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">9600 8N1</text>
+<text x="144.6" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Flow: None</text>
+<text x="230.6" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">UTF-8</text>
+<text x="280.6" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#e06c75" font-weight="normal" text-anchor="start" xml:space="preserve">● LOG bin 00:00:40</text>
+</g>
+<clipPath id="p7"><rect x="601" y="387" width="599" height="353"/></clipPath>
+<g clip-path="url(#p7)">
+<rect x="601" y="387" width="599" height="353" fill="#1e1f24" rx="0"/>
+<text x="611" y="409" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">（未接続）  Ctrl+Shift+K で接続</text>
+<rect x="601" y="716" width="599" height="24" fill="#2a2c33" rx="0"/>
+<line x1="601" y1="716.5" x2="1200" y2="716.5" stroke="#3b3d45" stroke-width="1"/>
+<rect x="611" y="720" width="54" height="16" fill="#4a8cff" rx="3"/>
+<text x="617" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="11" fill="#1e1f24" font-weight="bold" text-anchor="start" xml:space="preserve">PREFIX</text>
+<circle cx="683" cy="728" r="4" fill="#777777"/>
+<text x="692" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">未接続</text>
+<text x="749.2" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="770.4000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="791.6000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Shift_JIS</text>
+<text x="870.4000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">LOG off</text>
+<text x="934.8000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Esc 取消  Ctrl+B Ctrl+B を送る  ? 一覧…</text>
+</g>
+<rect x="601.5" y="387.5" width="598" height="352" fill="none" stroke="#4a8cff" stroke-width="1" rx="0"/>
+</svg>

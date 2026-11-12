@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740">
+<title>接続 3/5：フレーム</title>
+<rect x="0" y="0" width="1200" height="740" fill="#3b3d45" rx="0"/>
+<rect x="0" y="0" width="1200" height="32" fill="#f3f3f3" rx="0"/>
+<text x="12" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="13" fill="#222" font-weight="normal" text-anchor="start" xml:space="preserve">rs-term</text>
+<text x="1080" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">—</text>
+<text x="1126" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">☐</text>
+<text x="1172" y="21" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#333" font-weight="normal" text-anchor="middle" xml:space="preserve">✕</text>
+<text x="1192" y="734" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="10" fill="#9aa0aa" font-weight="normal" text-anchor="end" xml:space="preserve">OS キャプション（上 32px）は実装では描かない</text>
+<clipPath id="p12"><rect x="0" y="32" width="1200" height="708"/></clipPath>
+<g clip-path="url(#p12)">
+<rect x="0" y="32" width="1200" height="708" fill="#1e1f24" rx="0"/>
+<text x="10" y="54" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="14" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">（未接続）  Ctrl+Shift+K で接続</text>
+<rect x="0" y="716" width="1200" height="24" fill="#2a2c33" rx="0"/>
+<line x1="0" y1="716.5" x2="1200" y2="716.5" stroke="#3b3d45" stroke-width="1"/>
+<circle cx="14" cy="728" r="4" fill="#777777"/>
+<text x="23" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">未接続</text>
+<text x="80.2" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="101.4" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">—</text>
+<text x="122.60000000000001" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">Shift_JIS</text>
+<text x="201.4" y="732" font-family="Consolas, 'Cascadia Mono', 'Noto Sans Mono CJK JP', monospace" font-size="12" fill="#aeb2bb" font-weight="normal" text-anchor="start" xml:space="preserve">LOG off</text>
+</g>
+<rect x="0.5" y="32.5" width="1199" height="707" fill="none" stroke="#4a8cff" stroke-width="1" rx="0"/>
+<rect x="0" y="32" width="1200" height="708" fill="#000000" rx="0" fill-opacity="0.4"/>
+<rect x="320" y="102" width="560" height="394" fill="#2b2d34" stroke="#4a4d57" stroke-width="1" rx="8"/>
+<text x="336" y="131" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="15" fill="#7a7d86" font-weight="normal" text-anchor="start" xml:space="preserve">フレームを検索（例：7E1）</text>
+<rect x="334" y="116" width="2" height="20" fill="#4a8cff" rx="0"/>
+<line x1="320" y1="148" x2="880" y2="148" stroke="#3d4049"/>
+<text x="334" y="164" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">接続 › フレーム</text>
+<rect x="321" y="170" width="558" height="36" fill="#3a5f9f" rx="0"/>
+<text x="334" y="193" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#ffffff" font-weight="normal" text-anchor="start" xml:space="preserve">8N1</text>
+<text x="367.2" y="193" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#c9d6ee" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティなし・ストップ 1</text>
+<text x="864" y="193" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#57c25a" font-weight="normal" text-anchor="end" xml:space="preserve">✓</text>
+<text x="334" y="229" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">8N2</text>
+<text x="367.2" y="229" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティなし・ストップ 2</text>
+<text x="334" y="265" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">8E1</text>
+<text x="367.2" y="265" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティ偶数・ストップ 1</text>
+<text x="334" y="301" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">8E2</text>
+<text x="367.2" y="301" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティ偶数・ストップ 2</text>
+<text x="334" y="337" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">8O1</text>
+<text x="367.2" y="337" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティ奇数・ストップ 1</text>
+<text x="334" y="373" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">8O2</text>
+<text x="367.2" y="373" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">8 ビット・パリティ奇数・ストップ 2</text>
+<text x="334" y="409" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">7N1</text>
+<text x="367.2" y="409" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">7 ビット・パリティなし・ストップ 1</text>
+<text x="334" y="445" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="14" fill="#d4d6db" font-weight="normal" text-anchor="start" xml:space="preserve">7N2</text>
+<text x="367.2" y="445" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">7 ビット・パリティなし・ストップ 2  （以下スクロール、全 24 通り）</text>
+<line x1="320" y1="460" x2="880" y2="460" stroke="#3d4049"/>
+<text x="334" y="482" font-family="'Segoe UI', 'Yu Gothic UI', 'Noto Sans CJK JP', sans-serif" font-size="11" fill="#8b8f99" font-weight="normal" text-anchor="start" xml:space="preserve">Enter で次へ（ボーレート → フレーム → フロー → DTR）/ Esc で戻る</text>
+</svg>

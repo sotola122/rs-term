@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/rs-term-core", "crates/rs-term"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.95"
+
+[workspace.dependencies]
+alacritty_terminal = "=0.26.0"
+arboard = "=3.7.0"
+crossterm = "=0.29.0"
+encoding_rs = "=0.8.44"
+futures-channel = "=0.3.34"
+ratatui = "=0.30.2"
+serialport = "=4.10.1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

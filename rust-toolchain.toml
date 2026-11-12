@@ -1,0 +1,4 @@
+[toolchain]
+# Workspace rust-version is 1.95. ratatui 0.30 needs 1.88 or newer.
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

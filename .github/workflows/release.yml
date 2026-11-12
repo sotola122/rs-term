@@ -1,0 +1,105 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Packaging waits for the same gate as CI: no release from a red tree (N22).
+  test:
+    name: fmt, clippy, test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --locked --workspace
+
+  windows:
+    name: x86_64-pc-windows-msvc
+    needs: [test]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/package-release
+        with:
+          target: x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rs-term-x86_64-pc-windows-msvc
+          path: dist/
+          if-no-files-found: error
+
+  linux:
+    name: x86_64-unknown-linux-gnu
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/package-release
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rs-term-x86_64-unknown-linux-gnu
+          path: dist/
+          if-no-files-found: error
+
+  draft:
+    name: draft GitHub release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          win=artifacts/rs-term-x86_64-pc-windows-msvc
+          lin=artifacts/rs-term-x86_64-unknown-linux-gnu
+          exe=$(find "$win" -name rs-term.exe -print -quit)
+          bin=$(find "$lin" -name rs-term -type f -print -quit)
+          license=$(find "$win" -name LICENSE -print -quit)
+          notice=$(find "$win" -name NOTICE -print -quit)
+          test -n "$exe"
+          test -n "$bin"
+          test -n "$license"
+          test -n "$notice"
+          mkdir -p assets
+          cp "$exe" "assets/rs-term-${TAG}-x86_64-pc-windows-msvc.exe"
+          cp "$bin" "assets/rs-term-${TAG}-x86_64-unknown-linux-gnu"
+          cp "$license" assets/LICENSE
+          cp "$notice" assets/NOTICE
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" assets/* --clobber
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --title "$TAG" \
+              --notes "Draft release. This workflow does not publish it." \
+              assets/*
+          fi

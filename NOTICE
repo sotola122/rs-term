@@ -1,0 +1,20 @@
+rs-term
+Copyright 2026 sotola122
+
+This application is licensed under the Apache License, Version 2.0.
+See the LICENSE file.
+
+Third-party notices
+-------------------
+
+ratatui 0.30 and crossterm are licensed under the MIT License.
+
+serialport 4.10.1 is licensed under the Mozilla Public License, Version 2.0.
+The corresponding source for the version recorded in Cargo.lock can be
+downloaded from crates.io. This application does not modify serialport.
+
+alacritty_terminal 0.26.0 is licensed under the Apache License, Version 2.0.
+encoding_rs is licensed under (Apache-2.0 OR MIT) AND BSD-3-Clause.
+arboard is licensed under the MIT OR Apache-2.0 license.
+
+Zed's terminal crate is not included.
