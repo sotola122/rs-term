@@ -1,12 +1,33 @@
 //! Crossterm keys to session input, and the prefix-key state machine.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use rs_term_core::{Direction, Input, KeyInput};
+use rs_term_core::{encode_key, Direction, Input, KeyInput};
 
-/// Ctrl plus one character that has a control code. Default is Ctrl+A.
+/// Ctrl plus an ASCII letter (stored lowercase), `\` or `]`. Default is
+/// Ctrl+A. `cli::parse_prefix` is the only place that builds a non-default one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Prefix {
     pub ctrl: char,
+}
+
+impl Prefix {
+    /// The control byte the prefix stands for (Ctrl+A is 0x01), from the same
+    /// table the session uses for Ctrl keys.
+    pub fn byte(self) -> u8 {
+        encode_key(&KeyInput::Ctrl(self.ctrl), false)
+            .ok()
+            .and_then(|bytes| bytes.first().copied())
+            .unwrap_or(0)
+    }
+
+    /// Some terminals report Ctrl+\ and Ctrl+] as Ctrl+4 and Ctrl+5.
+    fn digit_alias(self) -> Option<char> {
+        match self.ctrl {
+            '\\' => Some('4'),
+            ']' => Some('5'),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Prefix {
@@ -143,29 +164,17 @@ fn prefix_action(key: &KeyEvent, prefix: Prefix) -> Action {
     Action::Run(command)
 }
 
-fn is_prefix(key: &KeyEvent, prefix: Prefix) -> bool {
+pub fn is_prefix(key: &KeyEvent, prefix: Prefix) -> bool {
     if key.modifiers.contains(KeyModifiers::ALT) || key.modifiers.contains(KeyModifiers::SHIFT) {
         return false;
     }
-    match key.code {
-        KeyCode::Char(ch)
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && ch.to_ascii_lowercase() == prefix.ctrl =>
-        {
-            true
-        }
-        KeyCode::Char(ch) if (ch as u32) < 32 && ch as u8 == prefix_byte(prefix) => true,
-        _ => false,
+    let KeyCode::Char(ch) = key.code else {
+        return false;
+    };
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return ch.to_ascii_lowercase() == prefix.ctrl || Some(ch) == prefix.digit_alias();
     }
-}
-
-fn prefix_byte(prefix: Prefix) -> u8 {
-    let lower = prefix.ctrl.to_ascii_lowercase();
-    if lower.is_ascii_lowercase() {
-        lower as u8 - b'a' + 1
-    } else {
-        0
-    }
+    (ch as u32) < 32 && ch as u8 == prefix.byte()
 }
 
 #[cfg(test)]
@@ -340,5 +349,44 @@ mod tests {
         );
         assert_eq!(scroll(KeyCode::Esc), Action::Run(Command::Cancel));
         assert_eq!(scroll(KeyCode::Char('?')), Action::Run(Command::Cancel));
+    }
+
+    #[test]
+    fn is_prefix_agrees_with_the_parsed_prefix() {
+        let ctrl = |ch| key(KeyCode::Char(ch), KeyModifiers::CONTROL);
+        let z = crate::cli::parse_prefix("C-z").unwrap();
+        assert!(is_prefix(&ctrl('z'), z));
+        assert!(is_prefix(&ctrl('Z'), z));
+        assert!(!is_prefix(&ctrl('a'), z));
+        assert!(!is_prefix(
+            &key(KeyCode::Char('z'), KeyModifiers::empty()),
+            z
+        ));
+        assert_eq!(z.byte(), 0x1A);
+
+        let backslash = crate::cli::parse_prefix("ctrl+\\").unwrap();
+        assert_eq!(backslash.byte(), 0x1C);
+        assert!(is_prefix(&ctrl('\\'), backslash));
+        assert!(is_prefix(&ctrl('4'), backslash));
+        assert!(!is_prefix(&ctrl('5'), backslash));
+        assert_eq!(
+            classify(&ctrl('\\'), backslash, Focus::Terminal),
+            Action::ArmPrefix
+        );
+        assert_eq!(
+            classify(&ctrl('\\'), backslash, Focus::Prefix),
+            Action::LiteralPrefix
+        );
+
+        let bracket = crate::cli::parse_prefix("ctrl-]").unwrap();
+        assert_eq!(bracket.byte(), 0x1D);
+        assert!(is_prefix(&ctrl(']'), bracket));
+        assert!(is_prefix(&ctrl('5'), bracket));
+        assert!(!is_prefix(&ctrl('4'), bracket));
+        assert!(is_prefix(
+            &key(KeyCode::Char('\u{1d}'), KeyModifiers::empty()),
+            bracket
+        ));
+        assert_eq!(Prefix::default().byte(), 0x01);
     }
 }
