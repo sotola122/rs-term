@@ -20,7 +20,7 @@ use rs_term_core::{
 use crate::cli::{self, Cli};
 use crate::copy::{clipboard_text, copy_text};
 use crate::keys::{self, Action, Command, Focus, Prefix};
-use crate::status::StatusView;
+use crate::status::{LinkState, StatusView};
 
 const BREAK_HOLD: Duration = Duration::from_millis(250);
 const DRAIN_BUDGET: usize = 512 * 1024;
@@ -190,7 +190,7 @@ impl App {
                 SessionEncoding::ShiftJis => "Shift_JIS".into(),
                 SessionEncoding::Utf8 => "UTF-8".into(),
             },
-            link: link_word(self.session.link()),
+            link: link_state(self.session.link()),
             log: log_word(self.session.log_state()),
             rx: self.session.rx_bytes(),
             tx: self.session.tx_bytes(),
@@ -883,12 +883,12 @@ fn stop_label(stop: StopBits) -> &'static str {
     }
 }
 
-fn link_word(link: &Link) -> String {
+fn link_state(link: &Link) -> LinkState {
     match link {
-        Link::Opening { .. } => "接続中".into(),
-        Link::Open { .. } => "接続".into(),
-        Link::Lost { .. } => "喪失".into(),
-        Link::Disconnected => "未接続".into(),
+        Link::Opening { .. } => LinkState::Opening,
+        Link::Open { .. } => LinkState::Open,
+        Link::Lost { .. } => LinkState::Lost,
+        Link::Disconnected => LinkState::Disconnected,
     }
 }
 

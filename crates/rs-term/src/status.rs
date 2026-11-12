@@ -4,13 +4,42 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use rs_term_core::Severity;
 
+/// The link as the status line shows it: a word and its color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    Disconnected,
+    Opening,
+    Open,
+    Lost,
+}
+
+impl LinkState {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Disconnected => "未接続",
+            Self::Opening => "接続中",
+            Self::Open => "接続",
+            Self::Lost => "喪失",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::Open => Color::Rgb(0x40, 0xC0, 0x40),
+            Self::Opening => Color::Rgb(0xFF, 0xD7, 0x00),
+            Self::Lost => Color::Rgb(0xFF, 0x60, 0x60),
+            Self::Disconnected => Color::Rgb(0x80, 0x80, 0x80),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusView {
     pub prefix: bool,
     pub port: String,
     pub frame: String,
     pub encoding: String,
-    pub link: String,
+    pub link: LinkState,
     pub log: String,
     pub rx: u64,
     pub tx: u64,
@@ -36,8 +65,8 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
         normal,
     ));
     spans.push(Span::styled(
-        format!("{}  ", view.link),
-        normal.fg(link_color(&view.link)),
+        format!("{}  ", view.link.word()),
+        normal.fg(view.link.color()),
     ));
     spans.push(Span::styled(
         format!("{}  RX {}  TX {}", view.log, view.rx, view.tx),
@@ -78,15 +107,6 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
         }
     }
     Line::from(spans)
-}
-
-fn link_color(link: &str) -> Color {
-    match link {
-        "接続" => Color::Rgb(0x40, 0xC0, 0x40),
-        "接続中" => Color::Rgb(0xFF, 0xD7, 0x00),
-        "喪失" => Color::Rgb(0xFF, 0x60, 0x60),
-        _ => Color::Rgb(0x80, 0x80, 0x80),
-    }
 }
 
 #[cfg(test)]
@@ -149,7 +169,7 @@ mod tests {
             port: "/dev/ttyUSB0".into(),
             frame: "9600 8N1".into(),
             encoding: "Shift_JIS".into(),
-            link: "接続".into(),
+            link: LinkState::Open,
             log: "LOG on".into(),
             rx: 12,
             tx: 3,
@@ -184,7 +204,7 @@ mod tests {
             port: "/dev/ttyUSB0".into(),
             frame: "9600 8N1".into(),
             encoding: "Shift_JIS".into(),
-            link: "接続".into(),
+            link: LinkState::Open,
             log: "LOG on".into(),
             rx: 12,
             tx: 3,
