@@ -1074,4 +1074,19 @@ mod tests {
             .count();
         assert_eq!(selected, 1);
     }
+
+    #[test]
+    fn the_default_log_name_without_a_port_has_a_placeholder() {
+        let mut app = picker_app(0);
+        app.close_modal();
+        assert!(app.session.params().path.is_empty());
+        app.ask_log();
+        assert_eq!(app.modal, Some(Modal::LogPath));
+        let name = Path::new(&app.input)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(name.starts_with("rs-term_"), "{name}");
+    }
 }

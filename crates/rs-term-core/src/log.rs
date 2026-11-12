@@ -451,9 +451,17 @@ pub fn suggested_log_path(directory: &Path, template: &str, port: &str) -> PathB
     directory.join(expand_log_name(template, port, Local::now()))
 }
 
+/// What `{port}` becomes when no port is selected (an empty path), so the
+/// default name is never `_20261112_093000.log`.
+pub const NO_PORT_TOKEN: &str = "rs-term";
+
 pub fn expand_log_name(template: &str, port: &str, when: DateTime<Local>) -> String {
+    let token = match port_token(port) {
+        token if token.is_empty() => NO_PORT_TOKEN.to_string(),
+        token => token,
+    };
     template
-        .replace("{port}", &port_token(port))
+        .replace("{port}", &token)
         .replace("{date}", &when.format("%Y%m%d").to_string())
         .replace("{time}", &when.format("%H%M%S").to_string())
 }
@@ -525,6 +533,24 @@ mod tests {
         assert!(name.starts_with("COM10_"), "{name}");
         assert!(!name.contains(':'));
         assert_eq!(port_token("/dev/ttyUSB0"), "ttyUSB0");
+    }
+
+    #[test]
+    fn an_unselected_port_gets_a_placeholder_in_the_default_name() {
+        let name = expand_log_name("{port}_{date}_{time}.log", "", Local::now());
+        assert!(name.starts_with("rs-term_"), "{name}");
+        assert!(name.ends_with(".log"));
+        let name = expand_log_name("{port}.log", "/dev/", Local::now());
+        assert_eq!(name, "rs-term.log");
+        let path = suggested_log_path(Path::new("logs"), "{port}_{date}.log", "");
+        assert!(path.starts_with("logs"), "{path:?}");
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("rs-term_"),
+            "{path:?}"
+        );
     }
 
     #[test]
