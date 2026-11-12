@@ -13,7 +13,7 @@ use rs_term_core::{
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
     OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding,
-    Settings, StopBits, TerminalPalette, MAX_PENDING,
+    Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
@@ -58,11 +58,18 @@ pub struct App {
     quit: bool,
     size: (u16, u16),
     last_tick: Instant,
+    /// Startup reasons (broken settings, warnings, a `--log` failure) that a
+    /// successful connect must not wipe from the status line.
+    startup: Option<Message>,
 }
 
 impl App {
     pub fn new(cli: Cli) -> Self {
         let (settings, load_note) = load_settings();
+        Self::with_settings(cli, settings, load_note)
+    }
+
+    fn with_settings(cli: Cli, settings: Settings, load_note: Option<String>) -> Self {
         let encoding = cli.encoding.unwrap_or(settings.encoding);
         let palette = palette_by_name(&settings.terminal.palette).unwrap_or_else(classic_dark);
         let mut session = Session::new(SessionConfig {
@@ -77,10 +84,11 @@ impl App {
         });
         let params = params_from(&settings, &cli, cli.port.clone().unwrap_or_default());
         let _ = session.set_serial_params(params.clone());
+        let mut startup = Vec::new();
         if let Some(note) = load_note {
-            session.set_message(Message::error(note));
+            startup.push(Message::error(note));
         } else if !settings.warnings.is_empty() {
-            session.set_message(Message::warn(settings.warnings.join(" ")));
+            startup.push(Message::warn(settings.warnings.join(" ")));
         }
         let mut app = Self {
             session,
@@ -100,9 +108,14 @@ impl App {
             quit: false,
             size: (80, 24),
             last_tick: Instant::now(),
+            startup: None,
         };
         if let Some(path) = cli.log {
-            app.start_log(path);
+            startup.push(app.start_log(path));
+        }
+        app.startup = combine_startup(startup);
+        if let Some(message) = &app.startup {
+            app.session.set_message(message.clone());
         }
         if params.path.is_empty() {
             app.open_picker();
@@ -506,7 +519,8 @@ impl App {
                     return;
                 }
                 self.close_modal();
-                self.start_log(PathBuf::from(input));
+                let message = self.start_log(PathBuf::from(input));
+                self.session.set_message(message);
             }
             Modal::Baud => match cli::parse_baud(&input) {
                 Ok(baud) => {
@@ -590,8 +604,14 @@ impl App {
         match ready {
             Ok(opened) => {
                 self.opening = None;
+                let keep = keep_startup(self.session.note(), self.startup.as_ref());
                 match self.session.finish_connect(opened) {
-                    Ok(events) => self.events = Some(events),
+                    Ok(events) => {
+                        self.events = Some(events);
+                        if let Some(message) = keep {
+                            self.session.set_message(message);
+                        }
+                    }
                     Err(OpenError::Cancelled) => {}
                     Err(error) => {
                         if self.session.note().is_none() {
@@ -617,7 +637,8 @@ impl App {
         }
     }
 
-    fn start_log(&mut self, path: PathBuf) {
+    /// Starts the text log and reports the outcome; the caller shows it.
+    fn start_log(&mut self, path: PathBuf) -> Message {
         let result = self.session.log(LogCommand::Start(LogTarget::Text {
             path,
             append: false,
@@ -631,8 +652,8 @@ impl App {
             timestamp: None,
         }));
         match result {
-            Ok(()) => self.session.set_message(Message::info("ログを開始した")),
-            Err(error) => self.session.set_message(Message::error(error.to_string())),
+            Ok(()) => Message::info("ログを開始した"),
+            Err(error) => Message::error(error.to_string()),
         }
     }
 
@@ -685,6 +706,36 @@ impl App {
         let current = self.picker_index.min(len - 1) as isize;
         let next = (current + delta).clamp(0, len as isize - 1);
         self.picker_index = next as usize;
+    }
+}
+
+/// The startup messages as one: texts joined, colored by the most severe.
+fn combine_startup(messages: Vec<Message>) -> Option<Message> {
+    let rank = |severity: Severity| match severity {
+        Severity::Info => 0,
+        Severity::Warn => 1,
+        Severity::Error => 2,
+    };
+    let severity = messages
+        .iter()
+        .map(|message| message.severity)
+        .max_by_key(|severity| rank(*severity))?;
+    let text: Vec<&str> = messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    Some(Message {
+        severity,
+        text: text.join("  "),
+    })
+}
+
+/// A successful connect clears the note. The startup message survives it
+/// only while it is still the one on screen (no later action replaced it).
+fn keep_startup(current: Option<&Message>, startup: Option<&Message>) -> Option<Message> {
+    match (current, startup) {
+        (Some(current), Some(startup)) if current == startup => Some(startup.clone()),
+        _ => None,
     }
 }
 
@@ -785,5 +836,57 @@ fn encoding_token(encoding: SessionEncoding) -> &'static str {
     match encoding {
         SessionEncoding::ShiftJis => "sjis",
         SessionEncoding::Utf8 => "utf8",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_messages_are_joined_with_the_highest_severity() {
+        let combined = combine_startup(vec![
+            Message::info("ログを開始した"),
+            Message::warn("注意の理由"),
+            Message::error("壊れている"),
+        ])
+        .unwrap();
+        assert_eq!(combined.severity, Severity::Error);
+        assert_eq!(combined.text, "ログを開始した  注意の理由  壊れている");
+        assert!(combine_startup(Vec::new()).is_none());
+        let only_info = combine_startup(vec![Message::info("ログを開始した")]).unwrap();
+        assert_eq!(only_info.severity, Severity::Info);
+    }
+
+    #[test]
+    fn a_connect_keeps_the_startup_message_unless_something_replaced_it() {
+        let startup = Message::error("設定が壊れている");
+        assert_eq!(
+            keep_startup(Some(&startup), Some(&startup)),
+            Some(startup.clone())
+        );
+        let open_error = Message::error("COM1 を開けない");
+        assert_eq!(keep_startup(Some(&open_error), Some(&startup)), None);
+        assert_eq!(keep_startup(None, Some(&startup)), None);
+        assert_eq!(keep_startup(Some(&startup), None), None);
+    }
+
+    #[test]
+    fn startup_reasons_all_reach_the_status_line() {
+        let dir = std::env::temp_dir();
+        let cli = Cli {
+            log: Some(dir),
+            ..Cli::default()
+        };
+        let settings = Settings {
+            warnings: vec!["未知の項目".into()],
+            ..Settings::default()
+        };
+        let app = App::with_settings(cli, settings, Some("settings.toml が壊れている".into()));
+        let (severity, text) = app.status_view().message.unwrap();
+        assert_eq!(severity, Severity::Error);
+        assert!(text.contains("settings.toml が壊れている"), "{text}");
+        assert!(!text.contains("ログを開始した"), "{text}");
+        assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
     }
 }
