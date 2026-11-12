@@ -35,7 +35,7 @@ fn main() {
     }
     if let Err(error) = run(cli) {
         // `eprintln!` panics when stderr is a terminal that has gone away.
-        let _ = writeln!(io::stderr(), "終了できない（OS: {error}）");
+        let _ = writeln!(io::stderr(), "Cannot exit cleanly (OS: {error})");
         std::process::exit(1);
     }
 }
