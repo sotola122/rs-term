@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use rs_term_core::{DataBits, Flow, Parity, SessionEncoding, StopBits};
+use rs_term_core::{AmbiguousWidth, DataBits, Flow, Parity, SessionEncoding, StopBits};
 
 use crate::keys::Prefix;
 
@@ -27,6 +27,9 @@ Options:
   -e, --encoding <sjis|utf8>
       --log <PATH>            write a text log to this file from startup
       --prefix <ctrl-a>       prefix key (ctrl-LETTER, ctrl-\\, ctrl-]; default ctrl-a)
+      --ambiguous-width <1|2|auto>
+                              cells for ambiguous-width characters (default auto:
+                              2 only on a conhost with a CJK code page)
   -h, --help
 
 Keys after the prefix:
@@ -48,6 +51,7 @@ pub struct Cli {
     pub encoding: Option<SessionEncoding>,
     pub log: Option<PathBuf>,
     pub prefix: Prefix,
+    pub ambiguous_width: Option<AmbiguousWidth>,
     pub help: bool,
 }
 
@@ -153,6 +157,7 @@ fn is_option(flag: &str) -> bool {
             | "--encoding"
             | "--log"
             | "--prefix"
+            | "--ambiguous-width"
     )
 }
 
@@ -207,6 +212,11 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
         "-e" | "--encoding" => cli.encoding = Some(parse_encoding(value)?),
         "--log" => cli.log = Some(PathBuf::from(value)),
         "--prefix" => cli.prefix = parse_prefix(value)?,
+        "--ambiguous-width" => {
+            cli.ambiguous_width = Some(AmbiguousWidth::parse(value).ok_or_else(|| {
+                format!("Ambiguous width `{}` must be 1, 2 or auto", lower(value))
+            })?)
+        }
         _ => return Err(format!("Unknown option: {flag}")),
     }
     Ok(())
@@ -271,6 +281,25 @@ mod tests {
         assert_eq!(cli.encoding, Some(SessionEncoding::ShiftJis));
         assert_eq!(cli.log.unwrap(), PathBuf::from("run.log"));
         assert_eq!(cli.prefix.ctrl, 'a');
+    }
+
+    #[test]
+    fn parses_the_ambiguous_width_option() {
+        assert_eq!(parse(["COM1"]).unwrap().ambiguous_width, None);
+        for (text, expect) in [
+            ("1", AmbiguousWidth::One),
+            ("2", AmbiguousWidth::Two),
+            ("auto", AmbiguousWidth::Auto),
+            ("AUTO", AmbiguousWidth::Auto),
+        ] {
+            let cli = parse(["--ambiguous-width", text]).unwrap();
+            assert_eq!(cli.ambiguous_width, Some(expect), "{text}");
+        }
+        let cli = parse(["--ambiguous-width=2", "COM1"]).unwrap();
+        assert_eq!(cli.ambiguous_width, Some(AmbiguousWidth::Two));
+        let error = parse(["--ambiguous-width", "3"]).unwrap_err();
+        assert!(error.contains("must be 1, 2 or auto"), "{error}");
+        assert!(parse(["--ambiguous-width"]).is_err());
     }
 
     #[test]
@@ -359,6 +388,7 @@ mod tests {
             vec!["-b"],
             vec!["COM1", "COM2"],
             vec!["--prefix", "x"],
+            vec!["--ambiguous-width", "3"],
         ] {
             let error = parse(args.clone()).unwrap_err();
             assert!(error.is_ascii(), "{args:?}: {error}");

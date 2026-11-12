@@ -86,6 +86,10 @@ impl App {
             encoding,
             newline: settings.newline,
             local_echo: settings.terminal.local_echo,
+            ambiguous_wide: cli
+                .ambiguous_width
+                .unwrap_or(settings.terminal.ambiguous_width)
+                .resolve(),
         });
         let params = params_from(&settings, &cli, cli.port.clone().unwrap_or_default());
         let _ = session.set_serial_params(params.clone());

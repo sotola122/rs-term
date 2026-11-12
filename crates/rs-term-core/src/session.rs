@@ -63,6 +63,8 @@ pub struct SessionConfig {
     pub encoding: SessionEncoding,
     pub newline: Newline,
     pub local_echo: bool,
+    /// Ambiguous-width characters take two cells (already resolved).
+    pub ambiguous_wide: bool,
 }
 
 impl Default for SessionConfig {
@@ -76,6 +78,7 @@ impl Default for SessionConfig {
             encoding: SessionEncoding::Utf8,
             newline: Newline::default(),
             local_echo: false,
+            ambiguous_wide: false,
         }
     }
 }
@@ -275,6 +278,7 @@ impl Session {
             config.screen.scrollback,
             config.encoding,
             config.newline,
+            config.ambiguous_wide,
         );
         Self {
             screen,
