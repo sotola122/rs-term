@@ -7,7 +7,9 @@
 //! command channel while that send is waiting.
 
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -455,8 +457,9 @@ pub(crate) struct Channels {
 pub(crate) fn spawn(
     port: Box<dyn PortIo>,
     generation: u64,
+    written: Arc<AtomicU64>,
 ) -> Result<(WorkerHandle, Channels), PortError> {
-    spawn_with(port, generation, |body| {
+    spawn_with(port, generation, written, |body| {
         thread::Builder::new()
             .name("rs-term-serial".into())
             .spawn(body)
@@ -468,6 +471,7 @@ type ThreadBody = Box<dyn FnOnce() + Send>;
 fn spawn_with(
     port: Box<dyn PortIo>,
     generation: u64,
+    written: Arc<AtomicU64>,
     start: impl FnOnce(ThreadBody) -> io::Result<JoinHandle<()>>,
 ) -> Result<(WorkerHandle, Channels), PortError> {
     let (data_tx, data_rx) = async_mpsc::channel(DATA_DEPTH);
@@ -475,6 +479,7 @@ fn spawn_with(
     let (cmd_tx, cmd_rx) = mpsc::sync_channel(COMMAND_DEPTH);
     let join = start(Box::new(move || {
         let outlet = Outlet {
+            written,
             data: data_tx,
             status: status_tx,
         };
@@ -496,6 +501,8 @@ fn spawn_with(
 }
 
 struct Outlet {
+    /// Bytes the port has accepted, shared with the session (its TX count).
+    written: Arc<AtomicU64>,
     data: async_mpsc::Sender<IoEvent>,
     status: async_mpsc::UnboundedSender<IoEvent>,
 }
@@ -567,7 +574,7 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
         Command::Shutdown => Step::Stop,
         Command::Cancel { generation: next } => {
             *ctx.generation = next;
-            drop_pending(ctx, out);
+            drop_pending(ctx);
             Step::Continue
         }
         Command::Write {
@@ -578,9 +585,6 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
                 return Step::Continue;
             }
             if write_generation != *ctx.generation {
-                out.status(IoEvent::TxDropped {
-                    bytes: bytes.len() as u64,
-                });
                 return Step::Continue;
             }
             if *ctx.pending_at >= ctx.pending.len() {
@@ -595,9 +599,6 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
                         bytes.len()
                     ),
                 }));
-                out.status(IoEvent::TxDropped {
-                    bytes: bytes.len() as u64,
-                });
                 return Step::Continue;
             }
             ctx.pending.extend(bytes);
@@ -632,13 +633,9 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
     }
 }
 
-/// Forget the bytes still waiting for the port and tell the session they
-/// will never be sent, so the TX count does not include them.
-fn drop_pending(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
-    let rest = ctx.pending.len().saturating_sub(*ctx.pending_at);
-    if rest > 0 {
-        out.status(IoEvent::TxDropped { bytes: rest as u64 });
-    }
+/// Forget the bytes still waiting for the port. They were never counted in
+/// the TX total, which only grows when the port accepts bytes.
+fn drop_pending(ctx: &mut IoCtx<'_>) {
     ctx.pending.clear();
     *ctx.pending_at = 0;
 }
@@ -655,6 +652,7 @@ fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
         match ctx.port.write(&ctx.pending[*ctx.pending_at..]) {
             Ok(0) => {}
             Ok(count) => {
+                out.written.fetch_add(count as u64, Ordering::Relaxed);
                 *ctx.pending_at += count;
                 if *ctx.pending_at >= ctx.pending.len() {
                     ctx.pending.clear();
@@ -672,7 +670,7 @@ fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
                         ctx.pending.len() - *ctx.pending_at
                     ),
                 }));
-                drop_pending(ctx, out);
+                drop_pending(ctx);
             }
         }
     }
@@ -825,7 +823,9 @@ mod tests {
     fn a_thread_that_cannot_start_is_an_error_and_closes_the_port() {
         let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let port = Box::new(DropFlag(dropped.clone()));
-        let result = spawn_with(port, 1, |_body| Err(io::Error::other("resource exhausted")));
+        let result = spawn_with(port, 1, Arc::default(), |_body| {
+            Err(io::Error::other("resource exhausted"))
+        });
         let message = match result {
             Err(error) => error.to_string(),
             Ok(_) => panic!("the spawn must fail"),

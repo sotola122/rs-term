@@ -185,12 +185,6 @@ pub enum IoEvent {
     Dropped {
         bytes: u64,
     },
-    /// The thread queued these bytes for the port but will never send them
-    /// (a write error, a cancel, or the pending limit). The session takes
-    /// them out of the TX count.
-    TxDropped {
-        bytes: u64,
-    },
 }
 
 /// A port open that has been started on the UI thread. `open` blocks and
@@ -312,7 +306,9 @@ pub struct Session {
     usb: Option<UsbIdentity>,
     reconnect: bool,
     rx_bytes: u64,
-    tx_bytes: u64,
+    /// Bytes the port threads of every connection have written. Shared with
+    /// the workers, so a disconnect or a cancel needs no bookkeeping.
+    tx_bytes: Arc<AtomicU64>,
 }
 
 impl Session {
@@ -342,7 +338,7 @@ impl Session {
             usb: None,
             reconnect: false,
             rx_bytes: 0,
-            tx_bytes: 0,
+            tx_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -351,7 +347,7 @@ impl Session {
     }
 
     pub fn tx_bytes(&self) -> u64 {
-        self.tx_bytes
+        self.tx_bytes.load(Ordering::Relaxed)
     }
 
     /// Open on the calling thread. The UI uses `begin_connect` instead.
@@ -400,18 +396,19 @@ impl Session {
         }
         match opened.result {
             Ok(port) => {
-                let (worker, channels) = match serial::spawn(port, current) {
-                    Ok(started) => started,
-                    Err(error) => {
-                        self.link = Link::Disconnected;
-                        let error = OpenError::Port(error);
-                        self.note = Some(Message::error(format!(
-                            "{} を開けない: {error}",
-                            opened.params.path
-                        )));
-                        return Err(error);
-                    }
-                };
+                let (worker, channels) =
+                    match serial::spawn(port, current, Arc::clone(&self.tx_bytes)) {
+                        Ok(started) => started,
+                        Err(error) => {
+                            self.link = Link::Disconnected;
+                            let error = OpenError::Port(error);
+                            self.note = Some(Message::error(format!(
+                                "{} を開けない: {error}",
+                                opened.params.path
+                            )));
+                            return Err(error);
+                        }
+                    };
                 self.worker = Some(worker);
                 // A line setting changed while the port was opening (the
                 // baud dialog) waits in `self.params`; the port was opened
@@ -677,7 +674,6 @@ impl Session {
             IoEvent::ApplyFailed(error) => self.note_apply_failed(error),
             IoEvent::Pins(pins) => self.note_pins(pins),
             IoEvent::Dropped { bytes } => self.note_dropped(bytes),
-            IoEvent::TxDropped { bytes } => self.tx_bytes = self.tx_bytes.saturating_sub(bytes),
         }
     }
 
@@ -877,10 +873,7 @@ impl Session {
             });
         }
         let generation = self.generation.load(Ordering::Relaxed);
-        let queued = bytes.len() as u64;
-        self.send_command(Command::Write { generation, bytes })?;
-        self.tx_bytes = self.tx_bytes.saturating_add(queued);
-        Ok(())
+        self.send_command(Command::Write { generation, bytes })
     }
 
     fn send_command(&mut self, command: Command) -> Result<(), SessionError> {
@@ -1078,6 +1071,8 @@ mod tests {
         partial: Option<usize>,
         allow_write: bool,
         write_error: bool,
+        /// Total bytes the port still accepts; `None` is unlimited.
+        write_budget: Option<usize>,
         applied: Vec<SerialParams>,
         dtr: Vec<bool>,
         rts: Vec<bool>,
@@ -1118,7 +1113,11 @@ mod tests {
             if !state.allow_write {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "write held"));
             }
-            let count = state.partial.unwrap_or(buf.len()).min(buf.len());
+            let mut count = state.partial.unwrap_or(buf.len()).min(buf.len());
+            if let Some(budget) = state.write_budget {
+                count = count.min(budget);
+                state.write_budget = Some(budget - count);
+            }
             if count == 0 {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "write wait"));
             }
@@ -1589,7 +1588,7 @@ mod tests {
         session.apply_input(Input::Bytes(vec![1, 2, 3, 4])).unwrap();
         let written = wait_written(&state, 4);
         assert_eq!(written, vec![1, 2, 3, 4]);
-        assert_eq!(session.tx_bytes(), 4);
+        wait_until(|| session.tx_bytes() == 4);
     }
 
     #[test]
@@ -1854,6 +1853,7 @@ mod tests {
             partial: None,
             allow_write: true,
             write_error: false,
+            write_budget: None,
             applied: Vec::new(),
             dtr: Vec::new(),
             rts: Vec::new(),
@@ -2067,7 +2067,7 @@ mod tests {
     }
 
     #[test]
-    fn tx_counts_what_is_queued_and_a_write_error_takes_it_back() {
+    fn tx_does_not_count_bytes_a_write_error_discarded() {
         let (state, open) = open_shared(PortState {
             write_error: true,
             ..empty_state()
@@ -2077,11 +2077,10 @@ mod tests {
         session
             .apply_input(Input::Bytes(b"abcde".to_vec()))
             .unwrap();
-        assert_eq!(session.tx_bytes(), 5);
-        pump_events(&mut session, &mut rx, |s| s.tx_bytes() == 0);
+        pump_events(&mut session, &mut rx, |s| s.note().is_some());
+        assert!(session.note().is_some());
         assert_eq!(session.tx_bytes(), 0);
         assert!(lock(&state).written.is_empty());
-        assert!(session.note().is_some());
     }
 
     #[test]
@@ -2091,19 +2090,20 @@ mod tests {
             ..empty_state()
         });
         let mut session = session();
-        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
         session.apply_input(Input::Bytes(b"abc".to_vec())).unwrap();
         session.apply_input(Input::Bytes(b"de".to_vec())).unwrap();
-        assert_eq!(session.tx_bytes(), 5);
         session.apply_input(Input::Cancel).unwrap();
-        pump_events(&mut session, &mut rx, |s| s.tx_bytes() == 0);
+        thread::sleep(Duration::from_millis(100));
+        lock(&state).allow_write = true;
+        thread::sleep(Duration::from_millis(100));
         assert_eq!(session.tx_bytes(), 0);
         assert!(lock(&state).written.is_empty());
     }
 
     #[test]
     fn tx_does_not_count_bytes_the_pending_limit_refused() {
-        let (_state, open) = open_shared(PortState {
+        let (state, open) = open_shared(PortState {
             allow_write: false,
             ..empty_state()
         });
@@ -2112,23 +2112,47 @@ mod tests {
         let big = serial::MAX_PENDING / 2 + 1;
         session.apply_input(Input::Bytes(vec![b'a'; big])).unwrap();
         session.apply_input(Input::Bytes(vec![b'b'; big])).unwrap();
-        assert_eq!(session.tx_bytes(), 2 * big as u64);
-        pump_events(&mut session, &mut rx, |s| s.tx_bytes() == big as u64);
-        assert_eq!(session.tx_bytes(), big as u64);
+        pump_events(&mut session, &mut rx, |s| s.note().is_some());
+        assert!(session.note().is_some(), "the second input is refused");
+        lock(&state).allow_write = true;
+        wait_until(|| lock(&state).written.len() == big);
+        wait_until(|| session.tx_bytes() == big as u64);
     }
 
     #[test]
-    fn tx_stays_counted_when_the_bytes_are_written() {
+    fn tx_counts_bytes_the_port_accepted() {
         let (state, open) = open_shared(empty_state());
         let mut session = session();
-        let mut rx = session.connect_with(SerialParams::default(), open).unwrap();
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
         session.apply_input(Input::Bytes(b"abc".to_vec())).unwrap();
         wait_until(|| lock(&state).written == b"abc");
-        thread::sleep(Duration::from_millis(100));
-        while let Some(event) = rx.try_recv() {
-            session.apply_event(event);
+        wait_until(|| session.tx_bytes() == 3);
+    }
+
+    /// A large send that the port drains slowly, then a disconnect or a
+    /// reconnect: TX is what the port accepted, not what was queued.
+    #[test]
+    fn tx_after_a_disconnect_mid_send_is_what_the_port_accepted() {
+        for reconnect in [false, true] {
+            let (state, open) = open_shared(PortState {
+                write_budget: Some(4110),
+                ..empty_state()
+            });
+            let mut session = session();
+            let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+            session
+                .apply_input(Input::Bytes(vec![b'x'; 1_048_586]))
+                .unwrap();
+            wait_until(|| lock(&state).written.len() == 4110);
+            session.disconnect();
+            if reconnect {
+                let (_second, open) = open_shared(empty_state());
+                let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+            }
+            session.close();
+            assert_eq!(lock(&state).written.len(), 4110);
+            assert_eq!(session.tx_bytes(), 4110, "reconnect: {reconnect}");
         }
-        assert_eq!(session.tx_bytes(), 3);
     }
 
     fn begin_opening(session: &mut Session, open: SharedOpen) -> PendingOpen {
