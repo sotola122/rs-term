@@ -1,6 +1,8 @@
 //! Full-screen layout: terminal grid, one status line, modal dialogs.
 
-use ratatui::buffer::Buffer;
+use std::num::NonZeroU16;
+
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -80,10 +82,27 @@ impl Widget for TerminalPane<'_> {
                 } else {
                     cell.text.as_str()
                 };
-                buf.set_stringn(area.x + col as u16, area.y + row as u16, text, width, style);
+                put_cell(
+                    buf,
+                    area.x + col as u16,
+                    area.y + row as u16,
+                    text,
+                    width,
+                    style,
+                );
                 col += width;
             }
         }
+    }
+}
+
+/// Draws one grid cell. A 2-cell cell is forced to two columns in the diff:
+/// the grid says two, but ratatui may measure one (an ambiguous character),
+/// and then the spacer is skipped and the next text is positioned absolutely.
+fn put_cell(buf: &mut Buffer, x: u16, y: u16, text: &str, width: usize, style: Style) {
+    buf.set_stringn(x, y, text, width, style);
+    if width == 2 {
+        buf[(x, y)].diff_option = CellDiffOption::ForcedWidth(NonZeroU16::new(2).unwrap());
     }
 }
 
@@ -321,6 +340,22 @@ mod tests {
                 row
             })
             .collect()
+    }
+
+    #[test]
+    fn a_two_cell_grid_cell_is_forced_to_two_columns() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        let style = Style::default();
+        put_cell(&mut buf, 0, 0, "\u{2460}", 2, style);
+        put_cell(&mut buf, 2, 0, "\u{3042}", 2, style);
+        put_cell(&mut buf, 4, 0, "a", 1, style);
+        let forced = CellDiffOption::ForcedWidth(NonZeroU16::new(2).unwrap());
+        assert_eq!(buf[(0, 0)].symbol(), "\u{2460}");
+        assert_eq!(buf[(0, 0)].diff_option, forced);
+        // A real wide character keeps working: still two columns.
+        assert_eq!(buf[(2, 0)].symbol(), "\u{3042}");
+        assert_eq!(buf[(2, 0)].diff_option, forced);
+        assert_eq!(buf[(4, 0)].diff_option, CellDiffOption::None);
     }
 
     fn render_help(width: u16, height: u16, scroll: usize) -> Vec<String> {

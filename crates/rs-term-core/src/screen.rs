@@ -20,6 +20,8 @@ use alacritty_terminal::vte::ansi::{
     Processor, Rgb as VteRgb, StandardCharset, TabulationClearMode,
 };
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::codec::{Codec, Newline, NewlineConverter, SessionEncoding};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,12 +199,141 @@ fn charset_slot(index: CharsetIndex) -> usize {
     }
 }
 
+/// The `ambiguous_width` setting and `--ambiguous-width` option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AmbiguousWidth {
+    /// Ambiguous characters take one cell.
+    One,
+    /// Ambiguous characters take two cells.
+    Two,
+    #[default]
+    Auto,
+}
+
+impl AmbiguousWidth {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "1" => Some(Self::One),
+            "2" => Some(Self::Two),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    /// Whether ambiguous characters are two cells wide on this console.
+    pub fn resolve(self) -> bool {
+        match self {
+            Self::One => false,
+            Self::Two => true,
+            Self::Auto => ambiguous_wide_auto(&ConsoleEnv::from_process()),
+        }
+    }
+}
+
+/// What `auto` looks at. Kept apart from the process so it can be tested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsoleEnv {
+    pub windows: bool,
+    /// `WT_SESSION` is set (Windows Terminal).
+    pub windows_terminal: bool,
+    /// `TERM_PROGRAM` is `vscode`.
+    pub vscode: bool,
+    /// The console output code page (`GetConsoleOutputCP`), if known.
+    pub code_page: Option<u32>,
+}
+
+impl ConsoleEnv {
+    pub fn from_process() -> Self {
+        Self {
+            windows: cfg!(windows),
+            windows_terminal: std::env::var_os("WT_SESSION").is_some(),
+            vscode: std::env::var_os("TERM_PROGRAM").is_some_and(|value| value == "vscode"),
+            code_page: console_output_cp(),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn console_output_cp() -> Option<u32> {
+    unsafe extern "system" {
+        fn GetConsoleOutputCP() -> u32;
+    }
+    // SAFETY: no arguments; returns 0 when there is no console.
+    match unsafe { GetConsoleOutputCP() } {
+        0 => None,
+        page => Some(page),
+    }
+}
+
+#[cfg(not(windows))]
+fn console_output_cp() -> Option<u32> {
+    None
+}
+
+/// conhost with a CJK output code page (932, 936, 949, 950) draws ambiguous
+/// characters two cells wide. Windows Terminal and VS Code do not.
+pub fn ambiguous_wide_auto(env: &ConsoleEnv) -> bool {
+    env.windows
+        && !env.windows_terminal
+        && !env.vscode
+        && matches!(env.code_page, Some(932 | 936 | 949 | 950))
+}
+
+/// Ambiguous East Asian Width: one cell by `unicode-width`, two by its CJK
+/// table. That table leaves Greek and Cyrillic letters at one cell, but
+/// conhost draws them two cells wide (measured on code page 932), so they
+/// are added. Box drawing and block elements stay narrow (conhost draws
+/// them one cell wide).
+pub(crate) fn is_ambiguous_wide(c: char) -> bool {
+    if c.width() != Some(1) || ('\u{2500}'..='\u{259F}').contains(&c) {
+        return false;
+    }
+    c.width_cjk() == Some(2)
+        || matches!(
+            c,
+            '\u{0391}'..='\u{03A1}'
+                | '\u{03A3}'..='\u{03A9}'
+                | '\u{03B1}'..='\u{03C1}'
+                | '\u{03C3}'..='\u{03C9}'
+                | '\u{0401}'
+                | '\u{0410}'..='\u{044F}'
+                | '\u{0451}'
+        )
+}
+
+/// `Term::input`, except an ambiguous character takes two cells when `wide`.
+/// `Term` stores a real 2-cell character (wrap, insert mode and spacers
+/// included); the stand-in is then replaced in the grid. After `input` the
+/// cursor sits past the pair (col - 2), or on the pair's spacer with
+/// `input_needs_wrap` set when the pair ends the row (col - 1).
+fn put_char(term: &mut Term<ReplyListener>, c: char, wide: bool) {
+    if !(wide && is_ambiguous_wide(c)) {
+        term.input(c);
+        return;
+    }
+    term.input('\u{3000}');
+    let cursor = &term.grid().cursor;
+    let (line, col) = (cursor.point.line, cursor.point.column.0);
+    let first = if cursor.input_needs_wrap {
+        col.checked_sub(1)
+    } else {
+        col.checked_sub(2)
+    };
+    if let Some(first) = first {
+        let cell = &mut term.grid_mut()[line][Column(first)];
+        if cell.flags.contains(Flags::WIDE_CHAR) {
+            cell.c = c;
+        }
+    }
+}
+
 /// The handler `Processor::advance` drives. Every call goes to `Term`; the
 /// text calls are also appended to `out` in the same order.
 struct Logged<'a> {
     term: &'a mut Term<ReplyListener>,
     out: &'a mut Vec<TextAtom>,
     charsets: &'a mut Charsets,
+    wide: bool,
 }
 
 macro_rules! forward {
@@ -218,7 +349,7 @@ macro_rules! forward {
 impl Handler for Logged<'_> {
     fn input(&mut self, c: char) {
         self.out.push(TextAtom::Char(self.charsets.map(c)));
-        self.term.input(c);
+        put_char(self.term, c, self.wide);
     }
     fn carriage_return(&mut self) {
         self.out.push(TextAtom::Cr);
@@ -330,6 +461,7 @@ pub(crate) struct Screen {
     notes: Rc<RefCell<Vec<String>>>,
     columns: usize,
     rows: usize,
+    wide: bool,
 }
 
 impl Screen {
@@ -339,6 +471,7 @@ impl Screen {
         scrollback: usize,
         encoding: SessionEncoding,
         newline: Newline,
+        wide: bool,
     ) -> Self {
         let columns = columns.max(1);
         let rows = rows.max(1);
@@ -371,6 +504,7 @@ impl Screen {
             notes,
             columns,
             rows,
+            wide,
         }
     }
 
@@ -414,6 +548,7 @@ impl Screen {
             term: &mut self.term,
             out: &mut text,
             charsets: &mut self.charsets,
+            wide: self.wide,
         };
         self.parser.advance(&mut handler, converted);
         ApplyOutcome {
@@ -426,7 +561,7 @@ impl Screen {
     /// Local echo. This does not touch the receive codec or the text log.
     pub(crate) fn echo_text(&mut self, text: &str) {
         for ch in text.chars() {
-            self.term.input(ch);
+            put_char(&mut self.term, ch, self.wide);
         }
     }
 
@@ -628,9 +763,9 @@ mod tests {
     use super::*;
     use crate::codec::{Newline, ReceiveNewline, TransmitNewline};
 
-    fn screen() -> Screen {
+    fn screen_with(columns: usize, wide: bool) -> Screen {
         Screen::new(
-            80,
+            columns,
             24,
             1000,
             SessionEncoding::Utf8,
@@ -638,7 +773,12 @@ mod tests {
                 receive: ReceiveNewline::Cr,
                 transmit: TransmitNewline::Cr,
             },
+            wide,
         )
+    }
+
+    fn screen() -> Screen {
+        screen_with(80, false)
     }
 
     #[test]
@@ -714,10 +854,141 @@ mod tests {
                 receive: ReceiveNewline::Cr,
                 transmit: TransmitNewline::Cr,
             },
+            false,
         );
         screen.apply_bytes(&[0x81, 0x1B, 0x5B, 0x48]);
         let row = &screen.visible_rows()[0];
         assert!(row.contains('\u{FFFD}'));
         assert!(!row.contains('ー'), "{row}");
+    }
+
+    #[test]
+    fn the_ambiguous_rule_follows_unicode_width() {
+        for c in ['\u{2460}', '\u{00B0}', '\u{00D7}', '\u{03B1}', '\u{2605}'] {
+            assert!(is_ambiguous_wide(c), "{c:?}");
+        }
+        // Box drawing and blocks stay narrow; ASCII and Latin-1 letters
+        // are narrow in both tables; CJK is wide in both (not ambiguous).
+        for c in [
+            '\u{2500}', '\u{2502}', '\u{2588}', '\u{259F}', 'A', '\u{00E9}',
+        ] {
+            assert!(!is_ambiguous_wide(c), "{c:?}");
+        }
+        for c in ['\u{3042}', '\u{6F22}', '\u{FF21}'] {
+            assert!(!is_ambiguous_wide(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_char_takes_two_cells_and_keeps_its_identity() {
+        let mut screen = screen_with(80, true);
+        screen.apply_bytes("a\u{2460}b".as_bytes());
+        let snap = screen.snapshot();
+        assert_eq!(snap.cells[1].text, "\u{2460}");
+        assert_eq!(snap.cells[1].width, 2);
+        assert_eq!(snap.cells[2].width, 0);
+        assert_eq!(snap.cells[3].text, "b");
+        assert_eq!(snap.cursor.column, 4);
+        assert_eq!(screen.visible_rows()[0], "a\u{2460}b");
+    }
+
+    #[test]
+    fn mode_off_leaves_ambiguous_chars_narrow() {
+        let mut screen = screen_with(80, false);
+        screen.apply_bytes("a\u{2460}b".as_bytes());
+        let snap = screen.snapshot();
+        assert_eq!(snap.cells[1].width, 1);
+        assert_eq!(snap.cells[2].text, "b");
+        assert_eq!(snap.cursor.column, 3);
+    }
+
+    #[test]
+    fn real_wide_characters_are_unchanged_in_either_mode() {
+        for wide in [false, true] {
+            let mut screen = screen_with(80, wide);
+            screen.apply_bytes("\u{3042}x".as_bytes());
+            let snap = screen.snapshot();
+            assert_eq!(snap.cells[0].text, "\u{3042}");
+            assert_eq!(snap.cells[0].width, 2);
+            assert_eq!(snap.cells[2].text, "x");
+        }
+    }
+
+    #[test]
+    fn a_wide_ambiguous_char_in_the_last_column_wraps_whole() {
+        let mut screen = screen_with(10, true);
+        screen.apply_bytes("123456789\u{2460}z".as_bytes());
+        let snap = screen.snapshot();
+        let row1 = &snap.cells[10..20];
+        assert_eq!(row1[0].text, "\u{2460}");
+        assert_eq!(row1[0].width, 2);
+        assert_eq!(row1[1].width, 0);
+        assert_eq!(row1[2].text, "z");
+        // The last cell of row 0 is a leading spacer, not the character.
+        assert_eq!(snap.cells[9].width, 0);
+        assert_eq!(screen.visible_rows()[0], "123456789");
+    }
+
+    #[test]
+    fn a_pair_that_ends_the_row_exactly_keeps_the_real_char() {
+        let mut screen = screen_with(10, true);
+        screen.apply_bytes("12345678\u{2460}".as_bytes());
+        let snap = screen.snapshot();
+        assert_eq!(snap.cells[8].text, "\u{2460}");
+        assert_eq!(snap.cells[8].width, 2);
+        assert_eq!(snap.cells[9].width, 0);
+        screen.apply_bytes(b"z");
+        assert_eq!(screen.snapshot().cells[10].text, "z");
+    }
+
+    #[test]
+    fn copied_text_has_the_real_chars_and_no_spacers() {
+        let mut screen = screen_with(20, true);
+        screen.apply_bytes("a\u{2460}\u{00B0}b".as_bytes());
+        screen.select_start(0, 0);
+        screen.select_update(0, 5);
+        assert_eq!(
+            screen.selected_text().unwrap().trim_end(),
+            "a\u{2460}\u{00B0}b"
+        );
+    }
+
+    #[test]
+    fn the_log_atoms_and_echo_keep_the_real_char() {
+        let mut screen = screen_with(20, true);
+        let outcome = screen.apply_bytes("\u{2460}".as_bytes());
+        assert_eq!(outcome.text, vec![TextAtom::Char('\u{2460}')]);
+        screen.echo_text("\u{00D7}");
+        assert_eq!(screen.visible_rows()[0], "\u{2460}\u{00D7}");
+        assert_eq!(screen.snapshot().cells[2].width, 2);
+    }
+
+    #[test]
+    fn auto_follows_the_console() {
+        let env = |windows, wt, vscode, page| ConsoleEnv {
+            windows,
+            windows_terminal: wt,
+            vscode,
+            code_page: page,
+        };
+        for page in [932, 936, 949, 950] {
+            assert!(ambiguous_wide_auto(&env(true, false, false, Some(page))));
+        }
+        assert!(!ambiguous_wide_auto(&env(true, false, false, Some(437))));
+        assert!(!ambiguous_wide_auto(&env(true, false, false, Some(65001))));
+        assert!(!ambiguous_wide_auto(&env(true, false, false, None)));
+        assert!(!ambiguous_wide_auto(&env(true, true, false, Some(932))));
+        assert!(!ambiguous_wide_auto(&env(true, false, true, Some(932))));
+        assert!(!ambiguous_wide_auto(&env(false, false, false, Some(932))));
+    }
+
+    #[test]
+    fn the_setting_parses_and_fixed_values_ignore_the_console() {
+        assert_eq!(AmbiguousWidth::parse("1"), Some(AmbiguousWidth::One));
+        assert_eq!(AmbiguousWidth::parse("2"), Some(AmbiguousWidth::Two));
+        assert_eq!(AmbiguousWidth::parse("AUTO"), Some(AmbiguousWidth::Auto));
+        assert_eq!(AmbiguousWidth::parse("3"), None);
+        assert!(!AmbiguousWidth::One.resolve());
+        assert!(AmbiguousWidth::Two.resolve());
     }
 }

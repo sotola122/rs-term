@@ -1699,6 +1699,7 @@ dependencies = [
  "serde",
  "serialport",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]

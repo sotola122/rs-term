@@ -15,6 +15,7 @@ futures-channel.workspace = true
 serde.workspace = true
 serialport.workspace = true
 toml.workspace = true
+unicode-width = "0.2"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libc = "0.2"

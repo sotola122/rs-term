@@ -16,7 +16,7 @@ use serde::de::IgnoredAny;
 use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
-use crate::screen::Rgb;
+use crate::screen::{AmbiguousWidth, Rgb};
 use crate::serial::{DataBits, Flow, Parity, StopBits};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +197,7 @@ pub struct TerminalSettings {
     pub scrollback: usize,
     pub local_echo: bool,
     pub palette: String,
+    pub ambiguous_width: AmbiguousWidth,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -229,6 +230,7 @@ impl Default for Settings {
                 scrollback: 10_000,
                 local_echo: false,
                 palette: "classic-dark".into(),
+                ambiguous_width: AmbiguousWidth::Auto,
             },
             log: LogSettings {
                 directory: String::new(),
@@ -296,6 +298,7 @@ struct RawTerminal {
     scrollback: Option<usize>,
     local_echo: Option<bool>,
     palette: Option<String>,
+    ambiguous_width: Option<String>,
     font_family: Option<IgnoredAny>,
     font_size_px: Option<IgnoredAny>,
     font_fallbacks: Option<IgnoredAny>,
@@ -514,6 +517,12 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
         ));
         palette = "classic-dark".into();
     }
+    let ambiguous_width = pick(
+        terminal.ambiguous_width,
+        d.terminal.ambiguous_width,
+        "terminal.ambiguous_width",
+        AmbiguousWidth::parse,
+    )?;
     Ok(Settings {
         serial: SerialSettings {
             baud_rate,
@@ -559,6 +568,7 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
             scrollback,
             local_echo: terminal.local_echo.unwrap_or(d.terminal.local_echo),
             palette,
+            ambiguous_width,
         },
         log: LogSettings {
             directory: log.directory.unwrap_or(d.log.directory),
@@ -617,6 +627,7 @@ rows = 24
 scrollback = 10000
 local_echo = false
 palette = "classic-dark"
+ambiguous_width = "auto"
 
 [log]
 directory = ""
@@ -647,8 +658,21 @@ text_encoding = "utf-8"
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.serial.baud_rate, 115_200);
         assert_eq!(loaded.terminal.scrollback, 10_000);
+        assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Auto);
         // The README says these values are the built-in d.
         assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
+    fn ambiguous_width_is_optional_and_validated() {
+        let loaded = load_settings_str("[terminal]\nambiguous_width = \"2\"\n").unwrap();
+        assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Two);
+        let loaded = load_settings_str("[terminal]\nambiguous_width = \"1\"\n").unwrap();
+        assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::One);
+        let loaded = load_settings_str("[terminal]\ncolumns = 80\n").unwrap();
+        assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Auto);
+        let error = load_settings_str("[terminal]\nambiguous_width = \"3\"\n").unwrap_err();
+        assert!(error.contains("ambiguous_width"), "{error}");
     }
 
     #[test]
