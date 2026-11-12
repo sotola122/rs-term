@@ -441,7 +441,7 @@ pub fn load_settings_file(path: &Path) -> Result<Settings, String> {
 fn pick<T>(
     text: Option<String>,
     default: T,
-    parse: fn(&str) -> Result<T, String>,
+    parse: impl Fn(&str) -> Result<T, String>,
 ) -> Result<T, String> {
     match text {
         Some(text) => parse(&text),
@@ -527,7 +527,9 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
                 parse_transmit,
             )?,
         },
-        encoding: pick(raw.encoding.session, defaults.encoding, parse_encoding)?,
+        encoding: pick(raw.encoding.session, defaults.encoding, |text| {
+            SessionEncoding::parse(text).ok_or_else(|| format!("encoding `{text}` は未知"))
+        })?,
         terminal: TerminalSettings {
             columns,
             rows,
@@ -597,14 +599,6 @@ pub fn parse_transmit(text: &str) -> Result<TransmitNewline, String> {
         "crlf" => Ok(TransmitNewline::CrLf),
         "lf" => Ok(TransmitNewline::Lf),
         other => Err(format!("transmit `{other}` は未知")),
-    }
-}
-
-pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
-    match text {
-        "utf-8" => Ok(SessionEncoding::Utf8),
-        "shift_jis" => Ok(SessionEncoding::ShiftJis),
-        other => Err(format!("encoding `{other}` は未知")),
     }
 }
 

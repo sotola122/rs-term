@@ -13,8 +13,8 @@ use rs_term_core::{
     classic_dark, list_ports, load_settings_file, log_dir_from_env, palette_by_name,
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
-    OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding,
-    SessionError, Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
+    OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionError, Settings,
+    Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
@@ -186,10 +186,7 @@ impl App {
                 params.path.clone()
             },
             frame: frame_text(params),
-            encoding: match self.session.encoding() {
-                SessionEncoding::ShiftJis => "Shift_JIS".into(),
-                SessionEncoding::Utf8 => "UTF-8".into(),
-            },
+            encoding: self.session.encoding().label().into(),
             link: link_state(self.session.link()),
             log: log_word(self.session.log_state()),
             rx: self.session.rx_bytes(),
@@ -447,10 +444,9 @@ impl App {
             Command::Baud => {
                 self.open_text(Modal::Baud, self.session.params().baud_rate.to_string())
             }
-            Command::Encoding => self.open_text(
-                Modal::Encoding,
-                encoding_token(self.session.encoding()).into(),
-            ),
+            Command::Encoding => {
+                self.open_text(Modal::Encoding, self.session.encoding().token().into())
+            }
             Command::Help => {
                 self.help = true;
                 self.help_scroll = 0;
@@ -898,13 +894,6 @@ fn log_word(log: &LogSession) -> String {
         LogSession::Running(LogTarget::Text { .. }) => "LOG on".into(),
         LogSession::Running(LogTarget::Binary { .. }) => "LOG bin".into(),
         LogSession::Failed { .. } => "LOG 失敗".into(),
-    }
-}
-
-fn encoding_token(encoding: SessionEncoding) -> &'static str {
-    match encoding {
-        SessionEncoding::ShiftJis => "sjis",
-        SessionEncoding::Utf8 => "utf8",
     }
 }
 

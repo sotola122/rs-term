@@ -189,6 +189,16 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The encoding dialog uses this too.
+pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
+    SessionEncoding::parse(text).ok_or_else(|| {
+        format!(
+            "エンコーディング `{}` は sjis か utf8 だけ",
+            text.to_ascii_lowercase()
+        )
+    })
+}
+
 pub fn parse_baud(text: &str) -> Result<u32, String> {
     let baud: u32 = text
         .parse()
@@ -197,14 +207,6 @@ pub fn parse_baud(text: &str) -> Result<u32, String> {
         return Err("ボーレートが範囲外（1〜4000000）".into());
     }
     Ok(baud)
-}
-
-pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "sjis" | "shift_jis" | "shift-jis" => Ok(SessionEncoding::ShiftJis),
-        "utf8" | "utf-8" => Ok(SessionEncoding::Utf8),
-        other => Err(format!("エンコーディング `{other}` は sjis か utf8 だけ")),
-    }
 }
 
 fn parse_data(text: &str) -> Result<DataBits, String> {
