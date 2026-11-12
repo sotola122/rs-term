@@ -5,6 +5,7 @@ mod cli;
 mod copy;
 mod keys;
 mod redraw;
+mod signal;
 mod status;
 mod term;
 mod view;
@@ -40,6 +41,7 @@ fn main() {
 
 fn run(cli: cli::Cli) -> io::Result<()> {
     term::install_panic_hook();
+    signal::install()?;
     let _guard = TermGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let _ = terminal.hide_cursor();
@@ -54,7 +56,7 @@ fn run(cli: cli::Cli) -> io::Result<()> {
             terminal.draw(|frame| view::draw(frame, &app))?;
             dirty = false;
         }
-        if event::poll(Duration::from_millis(10))? {
+        if signal::wait_event(Duration::from_millis(10))? {
             match event::read()? {
                 Event::Key(key) => app.on_key(key),
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved => continue,
@@ -68,5 +70,10 @@ fn run(cli: cli::Cli) -> io::Result<()> {
     }
     // Close the port before `terminal` and `_guard` are dropped.
     app.shutdown();
+    // ratatui shows the cursor in its `Drop` and `eprintln!`s a failure, which
+    // panics when the terminal is already gone (SIGHUP). Do it here and skip
+    // the drop.
+    let _ = terminal.show_cursor();
+    std::mem::forget(terminal);
     Ok(())
 }

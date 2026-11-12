@@ -1730,6 +1730,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "crossterm",
+ "libc",
  "ratatui",
  "rs-term-core",
 ]

@@ -131,8 +131,9 @@ impl App {
         app
     }
 
+    /// Prefix `q` or a termination signal (SIGTERM / SIGHUP on Unix).
     pub fn should_quit(&self) -> bool {
-        self.quit
+        self.quit || crate::signal::requested()
     }
 
     /// Quit path: stop the log and the port, and wait (bounded) until the
@@ -1019,6 +1020,27 @@ mod tests {
         assert!(text.contains("settings.toml が壊れている"), "{text}");
         assert!(!text.contains("ログを開始した"), "{text}");
         assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
+    }
+
+    /// The only test that touches the process-wide termination flag.
+    #[test]
+    fn a_termination_signal_makes_the_quit_check_true() {
+        let app = App::with_settings(Cli::default(), Settings::default(), None);
+        assert!(!app.should_quit());
+        crate::signal::request_for_test(true);
+        assert!(app.should_quit());
+        crate::signal::request_for_test(false);
+        assert!(!app.should_quit());
+        #[cfg(unix)]
+        {
+            crate::signal::install().unwrap();
+            // SAFETY: raising a signal whose handler was just installed.
+            assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
+            assert!(app.should_quit());
+            assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+            crate::signal::request_for_test(false);
+            assert!(!app.should_quit());
+        }
     }
 
     fn picker_app(ports: usize) -> App {
