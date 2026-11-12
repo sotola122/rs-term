@@ -902,8 +902,8 @@ mod tests {
     fn send_file_reads_a_regular_file() {
         let dir = temp_dir("send-ok");
         let path = dir.join("a.bin");
-        std::fs::write(&path, b"hello ").unwrap();
-        assert_eq!(read_send_file(&path).unwrap(), b"hello ");
+        std::fs::write(&path, b"hello\0").unwrap();
+        assert_eq!(read_send_file(&path).unwrap(), b"hello\0");
         let _ = std::fs::remove_dir_all(dir);
     }
 
