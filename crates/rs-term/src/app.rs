@@ -1,6 +1,7 @@
 //! One serial session and the modal commands around it.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,7 +14,7 @@ use rs_term_core::{
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
     OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding,
-    Settings, StopBits, TerminalPalette, MAX_PENDING,
+    SessionError, Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
@@ -49,6 +50,7 @@ pub struct App {
     prefix: Prefix,
     prefix_armed: bool,
     help: bool,
+    help_scroll: usize,
     modal: Option<Modal>,
     input: String,
     modal_error: Option<String>,
@@ -58,11 +60,18 @@ pub struct App {
     quit: bool,
     size: (u16, u16),
     last_tick: Instant,
+    /// Startup reasons (broken settings, warnings, a `--log` failure) that a
+    /// successful connect must not wipe from the status line.
+    startup: Option<Message>,
 }
 
 impl App {
     pub fn new(cli: Cli) -> Self {
         let (settings, load_note) = load_settings();
+        Self::with_settings(cli, settings, load_note)
+    }
+
+    fn with_settings(cli: Cli, settings: Settings, load_note: Option<String>) -> Self {
         let encoding = cli.encoding.unwrap_or(settings.encoding);
         let palette = palette_by_name(&settings.terminal.palette).unwrap_or_else(classic_dark);
         let mut session = Session::new(SessionConfig {
@@ -77,10 +86,11 @@ impl App {
         });
         let params = params_from(&settings, &cli, cli.port.clone().unwrap_or_default());
         let _ = session.set_serial_params(params.clone());
+        let mut startup = Vec::new();
         if let Some(note) = load_note {
-            session.set_message(Message::error(note));
+            startup.push(Message::error(note));
         } else if !settings.warnings.is_empty() {
-            session.set_message(Message::warn(settings.warnings.join(" ")));
+            startup.push(Message::warn(settings.warnings.join(" ")));
         }
         let mut app = Self {
             session,
@@ -91,6 +101,7 @@ impl App {
             prefix: cli.prefix,
             prefix_armed: false,
             help: false,
+            help_scroll: 0,
             modal: None,
             input: String::new(),
             modal_error: None,
@@ -100,9 +111,14 @@ impl App {
             quit: false,
             size: (80, 24),
             last_tick: Instant::now(),
+            startup: None,
         };
         if let Some(path) = cli.log {
-            app.start_log(path);
+            startup.push(app.start_log(path));
+        }
+        app.startup = combine_startup(startup);
+        if let Some(message) = &app.startup {
+            app.session.set_message(message.clone());
         }
         if params.path.is_empty() {
             app.open_picker();
@@ -118,6 +134,25 @@ impl App {
 
     pub fn show_help(&self) -> bool {
         self.help
+    }
+
+    pub fn help_scroll(&self) -> usize {
+        self.help_scroll
+    }
+
+    fn scroll_help(&mut self, up: bool, page: bool) {
+        let area = ratatui::layout::Rect::new(0, 0, self.size.0, self.size.1);
+        let step = if page {
+            crate::view::help_geometry(area).1.max(1)
+        } else {
+            1
+        };
+        let max = crate::view::help_max_scroll(area);
+        self.help_scroll = if up {
+            self.help_scroll.saturating_sub(step)
+        } else {
+            (self.help_scroll + step).min(max)
+        };
     }
 
     pub fn palette(&self) -> &TerminalPalette {
@@ -264,6 +299,7 @@ impl App {
             match keys::classify(&key, self.prefix, Focus::Help) {
                 Action::Run(Command::Quit) => self.quit = true,
                 Action::Run(Command::Cancel) => self.help = false,
+                Action::Scroll { up, page } => self.scroll_help(up, page),
                 _ => {}
             }
             return;
@@ -382,7 +418,10 @@ impl App {
                 Modal::Encoding,
                 encoding_token(self.session.encoding()).into(),
             ),
-            Command::Help => self.help = true,
+            Command::Help => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
             Command::Quit => self.quit = true,
             Command::Paste => self.paste_clipboard(),
             Command::Cancel => {
@@ -506,7 +545,8 @@ impl App {
                     return;
                 }
                 self.close_modal();
-                self.start_log(PathBuf::from(input));
+                let message = self.start_log(PathBuf::from(input));
+                self.session.set_message(message);
             }
             Modal::Baud => match cli::parse_baud(&input) {
                 Ok(baud) => {
@@ -590,8 +630,14 @@ impl App {
         match ready {
             Ok(opened) => {
                 self.opening = None;
+                let keep = keep_startup(self.session.note(), self.startup.as_ref());
                 match self.session.finish_connect(opened) {
-                    Ok(events) => self.events = Some(events),
+                    Ok(events) => {
+                        self.events = Some(events);
+                        if let Some(message) = keep {
+                            self.session.set_message(message);
+                        }
+                    }
                     Err(OpenError::Cancelled) => {}
                     Err(error) => {
                         if self.session.note().is_none() {
@@ -612,12 +658,16 @@ impl App {
     fn set_baud(&mut self, baud: u32) {
         let mut params = self.session.params().clone();
         params.baud_rate = baud;
-        if let Err(error) = self.session.set_serial_params(params) {
-            self.session.set_message(Message::error(error.to_string()));
+        match self.session.set_serial_params(params) {
+            Ok(()) => self
+                .session
+                .set_message(Message::info(baud_changed_text(baud))),
+            Err(error) => self.session.set_message(Message::error(error.to_string())),
         }
     }
 
-    fn start_log(&mut self, path: PathBuf) {
+    /// Starts the text log and reports the outcome; the caller shows it.
+    fn start_log(&mut self, path: PathBuf) -> Message {
         let result = self.session.log(LogCommand::Start(LogTarget::Text {
             path,
             append: false,
@@ -631,33 +681,15 @@ impl App {
             timestamp: None,
         }));
         match result {
-            Ok(()) => self.session.set_message(Message::info("ログを開始した")),
-            Err(error) => self.session.set_message(Message::error(error.to_string())),
+            Ok(()) => Message::info("ログを開始した"),
+            Err(error) => Message::error(error.to_string()),
         }
     }
 
     fn send_file(&mut self, path: &str) {
-        let meta = match std::fs::metadata(path) {
-            Ok(meta) => meta,
-            Err(error) => {
-                self.session
-                    .set_message(Message::error(format!("ファイルを読めない（OS: {error}）")));
-                return;
-            }
-        };
-        if meta.len() > MAX_PENDING as u64 {
-            self.session.set_message(Message::error(format!(
-                "{} バイトは上限 {} MiB を超えるので送らなかった",
-                meta.len(),
-                MAX_PENDING / (1024 * 1024)
-            )));
-            return;
-        }
-        match std::fs::read(path) {
+        match read_send_file(Path::new(path)) {
             Ok(bytes) => self.send_input(Input::Bytes(bytes)),
-            Err(error) => self
-                .session
-                .set_message(Message::error(format!("ファイルを読めない（OS: {error}）"))),
+            Err(message) => self.session.set_message(Message::error(message)),
         }
     }
 
@@ -688,6 +720,36 @@ impl App {
     }
 }
 
+/// The startup messages as one: texts joined, colored by the most severe.
+fn combine_startup(messages: Vec<Message>) -> Option<Message> {
+    let rank = |severity: Severity| match severity {
+        Severity::Info => 0,
+        Severity::Warn => 1,
+        Severity::Error => 2,
+    };
+    let severity = messages
+        .iter()
+        .map(|message| message.severity)
+        .max_by_key(|severity| rank(*severity))?;
+    let text: Vec<&str> = messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    Some(Message {
+        severity,
+        text: text.join("  "),
+    })
+}
+
+/// A successful connect clears the note. The startup message survives it
+/// only while it is still the one on screen (no later action replaced it).
+fn keep_startup(current: Option<&Message>, startup: Option<&Message>) -> Option<Message> {
+    match (current, startup) {
+        (Some(current), Some(startup)) if current == startup => Some(startup.clone()),
+        _ => None,
+    }
+}
+
 fn load_settings() -> (Settings, Option<String>) {
     let Some(path) = settings_path_from_env() else {
         return (Settings::default(), None);
@@ -713,6 +775,44 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
         rts: false,
         read_timeout: Duration::from_millis(settings.serial.read_timeout_ms),
     }
+}
+
+/// Reads a file to send. Only a regular file of at most `MAX_PENDING` bytes
+/// is accepted: FIFOs and devices report a length of 0 and never end, and a
+/// file can grow after the length check, so the read itself is capped too.
+fn read_send_file(path: &Path) -> Result<Vec<u8>, String> {
+    let read_error = |error: std::io::Error| format!("ファイルを読めない（OS: {error}）");
+    let meta = std::fs::metadata(path).map_err(read_error)?;
+    if !meta.is_file() {
+        return Err("通常のファイルではないので送らなかった".into());
+    }
+    if meta.len() > MAX_PENDING as u64 {
+        return Err(too_large(meta.len() as usize));
+    }
+    let file = std::fs::File::open(path).map_err(read_error)?;
+    read_at_most(file, MAX_PENDING)?.ok_or_else(|| too_large(MAX_PENDING + 1))
+}
+
+/// Everything `reader` yields, or `None` if it yields more than `limit` bytes.
+fn read_at_most(reader: impl Read, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("ファイルを読めない（OS: {error}）"))?;
+    Ok((bytes.len() <= limit).then_some(bytes))
+}
+
+fn too_large(bytes: usize) -> String {
+    SessionError::TooLarge {
+        bytes,
+        limit: MAX_PENDING,
+    }
+    .to_string()
+}
+
+fn baud_changed_text(baud: u32) -> String {
+    format!("ボーレートを {baud} にした")
 }
 
 fn frame_text(params: &SerialParams) -> String {
@@ -785,5 +885,107 @@ fn encoding_token(encoding: SessionEncoding) -> &'static str {
     match encoding {
         SessionEncoding::ShiftJis => "sjis",
         SessionEncoding::Utf8 => "utf8",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rs-term-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn send_file_reads_a_regular_file() {
+        let dir = temp_dir("send-ok");
+        let path = dir.join("a.bin");
+        std::fs::write(&path, b"hello\0").unwrap();
+        assert_eq!(read_send_file(&path).unwrap(), b"hello\0");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_file_rejects_a_directory_and_a_missing_path() {
+        let dir = temp_dir("send-dir");
+        let error = read_send_file(&dir).unwrap_err();
+        assert!(error.contains("通常のファイルではない"), "{error}");
+        let error = read_send_file(&dir.join("none")).unwrap_err();
+        assert!(error.contains("ファイルを読めない"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_file_rejects_an_oversized_file_before_reading() {
+        let dir = temp_dir("send-big");
+        let path = dir.join("big.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_PENDING as u64 + 1).unwrap();
+        drop(file);
+        let error = read_send_file(&path).unwrap_err();
+        assert!(error.contains("上限 16 MiB"), "{error}");
+        assert!(error.contains(&(MAX_PENDING + 1).to_string()), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_read_stops_at_the_limit_even_for_an_endless_source() {
+        assert_eq!(read_at_most(&b"abc"[..], 3).unwrap(), Some(b"abc".to_vec()));
+        assert_eq!(read_at_most(&b"abcd"[..], 3).unwrap(), None);
+        assert_eq!(read_at_most(std::io::repeat(0), 1000).unwrap(), None);
+    }
+
+    #[test]
+    fn baud_change_has_a_confirmation_text() {
+        assert_eq!(baud_changed_text(9600), "ボーレートを 9600 にした");
+    }
+
+    #[test]
+    fn startup_messages_are_joined_with_the_highest_severity() {
+        let combined = combine_startup(vec![
+            Message::info("ログを開始した"),
+            Message::warn("注意の理由"),
+            Message::error("壊れている"),
+        ])
+        .unwrap();
+        assert_eq!(combined.severity, Severity::Error);
+        assert_eq!(combined.text, "ログを開始した  注意の理由  壊れている");
+        assert!(combine_startup(Vec::new()).is_none());
+        let only_info = combine_startup(vec![Message::info("ログを開始した")]).unwrap();
+        assert_eq!(only_info.severity, Severity::Info);
+    }
+
+    #[test]
+    fn a_connect_keeps_the_startup_message_unless_something_replaced_it() {
+        let startup = Message::error("設定が壊れている");
+        assert_eq!(
+            keep_startup(Some(&startup), Some(&startup)),
+            Some(startup.clone())
+        );
+        let open_error = Message::error("COM1 を開けない");
+        assert_eq!(keep_startup(Some(&open_error), Some(&startup)), None);
+        assert_eq!(keep_startup(None, Some(&startup)), None);
+        assert_eq!(keep_startup(Some(&startup), None), None);
+    }
+
+    #[test]
+    fn startup_reasons_all_reach_the_status_line() {
+        let dir = std::env::temp_dir();
+        let cli = Cli {
+            log: Some(dir),
+            ..Cli::default()
+        };
+        let settings = Settings {
+            warnings: vec!["未知の項目".into()],
+            ..Settings::default()
+        };
+        let app = App::with_settings(cli, settings, Some("settings.toml が壊れている".into()));
+        let (severity, text) = app.status_view().message.unwrap();
+        assert_eq!(severity, Severity::Error);
+        assert!(text.contains("settings.toml が壊れている"), "{text}");
+        assert!(!text.contains("ログを開始した"), "{text}");
+        assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
     }
 }

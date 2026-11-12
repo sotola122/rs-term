@@ -3,8 +3,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Clear, Padding, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 use rs_term_core::{
     line_to_viewport, AnsiName, CellColor, Rgb, ScreenCell, ScreenSnapshot, TerminalPalette,
@@ -13,7 +13,7 @@ use rs_term_core::{
 use crate::app::{App, ModalBody};
 use crate::status::status_line;
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 プレフィックス（既定 Ctrl+A）の次のキー
 
   c  接続          d  切断          r  再接続
@@ -30,16 +30,19 @@ const HELP: &str = "\
 コピー       ドラッグ（OSC 52 と、取れるときはクリップボード）
 Ctrl+C は終了ではなくポートへ送る。終了はプレフィックスの次の q。
 
-Esc で閉じる
+Esc で閉じる（小さい画面では上下で動かす）
 ";
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
     frame.render_widget(TerminalPane { app }, chunks[0]);
-    frame.render_widget(Paragraph::new(status_line(&app.status_view())), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(status_line(&app.status_view(), chunks[1].width)),
+        chunks[1],
+    );
     if app.show_help() {
-        draw_overlay(frame, "ヘルプ", HELP, 62, 18);
+        draw_help(frame, app.help_scroll());
     } else if let Some(body) = app.modal_body() {
         draw_modal(frame, &body);
     }
@@ -196,6 +199,7 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
     let height = (body.lines.len() as u16 + 2).clamp(5, 16);
     let area = centered(frame.area(), 68, height);
     frame.render_widget(Clear, area);
+    let inner = area.width.saturating_sub(2) as usize;
     let lines: Vec<Line> = body
         .lines
         .iter()
@@ -207,7 +211,11 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
             } else {
                 Style::default().fg(Color::Rgb(0xD4, 0xD4, 0xD4))
             };
-            Line::from(Span::styled(text.clone(), style))
+            let text = match text.strip_prefix("> ") {
+                Some(input) => format!("> {}", fit_tail(input, inner.saturating_sub(2))),
+                None => text.clone(),
+            };
+            Line::from(Span::styled(text, style))
         })
         .collect();
     let paragraph = Paragraph::new(lines)
@@ -216,12 +224,54 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_overlay(frame: &mut Frame, title: &str, text: &str, width: u16, height: u16) {
-    let area = centered(frame.area(), width, height);
+/// `text` if it fits in `width` cells, otherwise `…` and its tail, so the end
+/// of a long input (where the cursor is) stays visible on one line.
+fn fit_tail(text: &str, width: usize) -> String {
+    if Line::from(text).width() <= width {
+        return text.to_string();
+    }
+    let mut tail: Vec<char> = Vec::new();
+    let mut used = 1;
+    for ch in text.chars().rev() {
+        let w = Span::raw(ch.to_string()).width();
+        if used + w > width {
+            break;
+        }
+        used += w;
+        tail.push(ch);
+    }
+    tail.push('…');
+    tail.iter().rev().collect()
+}
+
+/// The help box, sized from `HELP`: widest line plus border and padding by
+/// line count plus border, both clamped to the area. The second value is how
+/// many help lines are visible.
+pub fn help_geometry(area: Rect) -> (Rect, usize) {
+    let text = Text::from(HELP);
+    let width = text.lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
+    let height = text.lines.len() as u16 + 2;
+    let rect = centered(area, width, height);
+    (rect, rect.height.saturating_sub(2) as usize)
+}
+
+/// How far the help can scroll in an area of this size.
+pub fn help_max_scroll(area: Rect) -> usize {
+    let (_, visible) = help_geometry(area);
+    HELP.lines().count().saturating_sub(visible)
+}
+
+fn draw_help(frame: &mut Frame, scroll: usize) {
+    let (area, _) = help_geometry(frame.area());
+    let scroll = scroll.min(help_max_scroll(frame.area())) as u16;
     frame.render_widget(Clear, area);
-    let paragraph = Paragraph::new(text)
-        .block(Block::bordered().title(title))
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(HELP)
+        .block(
+            Block::bordered()
+                .title("ヘルプ")
+                .padding(Padding::horizontal(1)),
+        )
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
@@ -233,5 +283,88 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y + area.height.saturating_sub(height) / 2,
         width,
         height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn rows(buffer: &Buffer) -> Vec<String> {
+        (0..buffer.area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0;
+                while x < buffer.area.width {
+                    let symbol = buffer[(x, y)].symbol();
+                    row.push_str(symbol);
+                    x += (Line::from(symbol).width() as u16).max(1);
+                }
+                row
+            })
+            .collect()
+    }
+
+    fn render_help(width: u16, height: u16, scroll: usize) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| draw_help(frame, scroll)).unwrap();
+        rows(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn help_shows_every_line_at_80x24() {
+        let screen = render_help(80, 24, 0);
+        for line in HELP.lines().filter(|line| !line.trim().is_empty()) {
+            assert!(
+                screen.iter().any(|row| row.contains(line.trim_end())),
+                "missing {line:?} in {screen:#?}"
+            );
+        }
+        assert!(screen.iter().any(|row| row.contains("Esc で閉じる")));
+    }
+
+    #[test]
+    fn help_scrolls_when_the_frame_is_too_small() {
+        let area = Rect::new(0, 0, 80, 10);
+        let max = help_max_scroll(area);
+        assert!(max > 0);
+        let top = render_help(80, 10, 0);
+        assert!(!top.iter().any(|row| row.contains("Esc で閉じる")));
+        let bottom = render_help(80, 10, max + 5);
+        assert!(bottom.iter().any(|row| row.contains("Esc で閉じる")));
+        assert_eq!(help_max_scroll(Rect::new(0, 0, 80, 24)), 0);
+    }
+
+    #[test]
+    fn fit_tail_keeps_the_end_and_never_splits_a_wide_char() {
+        assert_eq!(fit_tail("abc", 5), "abc");
+        assert_eq!(fit_tail("abcdef", 4), "…def");
+        assert_eq!(fit_tail("あいうえお", 6), "…えお");
+        assert_eq!(fit_tail("あいうえお", 5), "…えお");
+        assert_eq!(fit_tail("abc", 0), "…");
+    }
+
+    #[test]
+    fn a_long_modal_input_stays_on_one_line_with_its_tail_visible() {
+        let long = format!("/very/long/{}/end.log█", "d".repeat(100));
+        let body = ModalBody {
+            title: "ログ開始",
+            lines: vec![
+                ("ログファイルのパス".into(), false),
+                (format!("> {long}"), false),
+            ],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw_modal(frame, &body)).unwrap();
+        let screen = rows(terminal.backend().buffer());
+        let row = screen
+            .iter()
+            .find(|row| row.contains("> …"))
+            .unwrap_or_else(|| panic!("{screen:#?}"));
+        assert!(row.contains("/end.log█"), "{row:?}");
+        assert!(Line::from(row.trim_end()).width() <= 80);
+        assert_eq!(screen.iter().filter(|row| row.contains("ddd")).count(), 1);
     }
 }

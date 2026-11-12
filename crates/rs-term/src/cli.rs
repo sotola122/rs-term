@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use rs_term_core::{encode_key, DataBits, Flow, KeyInput, Parity, SessionEncoding, StopBits};
+use rs_term_core::{DataBits, Flow, Parity, SessionEncoding, StopBits};
 
 use crate::keys::Prefix;
 
@@ -24,7 +24,7 @@ PORT を省くと、画面の中でポートを選ぶか、パスを入力する
       --flow <none|xonxoff|rtscts>
   -e, --encoding <sjis|utf8>
       --log <PATH>            起動時にテキストログをこのファイルへ書く
-      --prefix <ctrl-a>       プレフィックス（既定 ctrl-a）
+      --prefix <ctrl-a>       プレフィックス（ctrl-英字、ctrl-\\、ctrl-]。既定 ctrl-a）
   -h, --help
 
 プレフィックスの次のキー:
@@ -223,6 +223,8 @@ fn parse_flow(text: &str) -> Result<Flow, String> {
     }
 }
 
+const PREFIX_USAGE: &str = "プレフィックスは ctrl-英字、ctrl-\\、ctrl-] のどれか（例: ctrl-a）。Ctrl+[ は Esc と同じなど、ほかは区別できない";
+
 pub fn parse_prefix(text: &str) -> Result<Prefix, String> {
     let lower = text.to_ascii_lowercase();
     let body = lower
@@ -231,22 +233,13 @@ pub fn parse_prefix(text: &str) -> Result<Prefix, String> {
         .or_else(|| lower.strip_prefix("c-"))
         .or_else(|| lower.strip_prefix("c+"))
         .or_else(|| lower.strip_prefix('^'));
-    let Some(body) = body else {
-        return Err("プレフィックスは ctrl-英字 で指定する（例: ctrl-a）".into());
-    };
-    let mut chars = body.chars();
-    let Some(ch) = chars.next() else {
-        return Err("プレフィックスは ctrl-英字 で指定する（例: ctrl-a）".into());
-    };
-    if chars.next().is_some() {
-        return Err("プレフィックスは ctrl-英字 で指定する（例: ctrl-a）".into());
+    let mut chars = body.unwrap_or("").chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) if ch.is_ascii_lowercase() || ch == '\\' || ch == ']' => {
+            Ok(Prefix { ctrl: ch })
+        }
+        _ => Err(PREFIX_USAGE.into()),
     }
-    if encode_key(&KeyInput::Ctrl(ch), false).is_err() {
-        return Err(format!("ctrl-{ch} には制御コードが無い"));
-    }
-    Ok(Prefix {
-        ctrl: ch.to_ascii_lowercase(),
-    })
 }
 
 #[cfg(test)]
@@ -298,5 +291,27 @@ mod tests {
         let cli = parse(["--prefix", "C-b"]).unwrap();
         assert_eq!(cli.prefix.ctrl, 'b');
         assert!(parse(["-h"]).unwrap().help);
+    }
+
+    #[test]
+    fn prefix_accepts_letters_backslash_and_bracket_only() {
+        for (spec, ctrl) in [
+            ("ctrl-a", 'a'),
+            ("ctrl+a", 'a'),
+            ("C-z", 'z'),
+            ("C-Z", 'z'),
+            ("ctrl+\\", '\\'),
+            ("ctrl-]", ']'),
+        ] {
+            assert_eq!(parse_prefix(spec).unwrap().ctrl, ctrl, "{spec}");
+            assert!(parse(["--prefix", spec]).is_ok(), "{spec}");
+        }
+        for spec in [
+            "ctrl-3", "ctrl-[", "ctrl-?", "ctrl-@", "ctrl-^", "ctrl-_", "ctrl-1", "ctrl- ",
+            "ctrl--", "ctrl-", "ctrl-ab", "a",
+        ] {
+            let error = parse(["--prefix", spec]).unwrap_err();
+            assert!(error.contains("プレフィックス"), "{spec}: {error}");
+        }
     }
 }

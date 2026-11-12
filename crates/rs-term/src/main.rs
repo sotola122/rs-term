@@ -4,18 +4,20 @@ mod app;
 mod cli;
 mod copy;
 mod keys;
+mod redraw;
 mod status;
 mod term;
 mod view;
 
 use std::io::{self, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, MouseEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::app::App;
+use crate::redraw::RedrawGate;
 use crate::term::TermGuard;
 
 fn main() {
@@ -44,18 +46,24 @@ fn run(cli: cli::Cli) -> io::Result<()> {
     let mut app = App::new(cli);
     let size = terminal.size()?;
     app.on_resize(size.width, size.height);
+    let mut gate = RedrawGate::default();
+    let mut dirty = true;
     while !app.should_quit() {
-        let _drained = app.drain_serial();
-        terminal.draw(|frame| view::draw(frame, &app))?;
-        let timeout = Duration::from_millis(10);
-        if event::poll(timeout)? {
+        dirty |= app.drain_serial();
+        if gate.should_draw(dirty, app.status_view(), Instant::now()) {
+            terminal.draw(|frame| view::draw(frame, &app))?;
+            dirty = false;
+        }
+        if event::poll(Duration::from_millis(10))? {
             match event::read()? {
                 Event::Key(key) => app.on_key(key),
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved => continue,
                 Event::Mouse(mouse) => app.on_mouse(mouse),
                 Event::Resize(width, height) => app.on_resize(width, height),
                 Event::Paste(text) => app.on_paste(text),
-                _ => {}
+                _ => continue,
             }
+            dirty = true;
         }
     }
     Ok(())
