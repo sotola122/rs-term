@@ -497,10 +497,7 @@ impl App {
     }
 
     fn ask_log(&mut self) {
-        if matches!(
-            self.session.log_state(),
-            LogSession::Running(_) | LogSession::Paused(_)
-        ) {
+        if matches!(self.session.log_state(), LogSession::Running(_)) {
             self.session
                 .set_message(Message::error("すでにログ中。先にログを停止"));
             return;
@@ -804,8 +801,6 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
         parity: cli.parity.unwrap_or(settings.serial.parity),
         stop_bits: cli.stop_bits.unwrap_or(settings.serial.stop_bits),
         flow: cli.flow.unwrap_or(settings.serial.flow),
-        dtr_on_open: None,
-        rts: false,
         read_timeout: Duration::from_millis(settings.serial.read_timeout_ms),
     }
 }
@@ -900,16 +895,8 @@ fn link_word(link: &Link) -> String {
 fn log_word(log: &LogSession) -> String {
     match log {
         LogSession::Stopped => "LOG off".into(),
-        LogSession::Running(LogTarget::Text { .. })
-        | LogSession::Paused(LogTarget::Text { .. }) => {
-            if matches!(log, LogSession::Paused(_)) {
-                "LOG 一時停止".into()
-            } else {
-                "LOG on".into()
-            }
-        }
+        LogSession::Running(LogTarget::Text { .. }) => "LOG on".into(),
         LogSession::Running(LogTarget::Binary { .. }) => "LOG bin".into(),
-        LogSession::Paused(LogTarget::Binary { .. }) => "LOG 一時停止".into(),
         LogSession::Failed { .. } => "LOG 失敗".into(),
     }
 }

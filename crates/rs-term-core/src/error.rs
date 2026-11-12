@@ -34,7 +34,6 @@ pub enum SessionError {
 /// Failure of a log command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogError {
-    NotRunning,
     /// Another process holds the file.
     Busy,
     /// This session already logs to a different file.
@@ -99,7 +98,6 @@ impl fmt::Display for SessionError {
 impl fmt::Display for LogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LogError::NotRunning => write!(f, "ログは開始していない"),
             LogError::Busy => {
                 write!(f, "そのログファイルは別のプロセスが使用中")
             }
@@ -141,7 +139,6 @@ mod tests {
             }
             .to_string(),
             SessionError::NoControlCode { ch: 'é' }.to_string(),
-            LogError::NotRunning.to_string(),
             LogError::Busy.to_string(),
             LogError::AlreadyRunning.to_string(),
             LogError::InvalidName("..".into()).to_string(),

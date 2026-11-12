@@ -8,12 +8,11 @@
 //! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` table) are ignored
 //! and reported in one warning.
 
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::de::IgnoredAny;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
 use crate::screen::Rgb;
@@ -309,65 +308,10 @@ struct RawLog {
     text_encoding: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct SavedSettings {
-    schema: u32,
-    serial: SavedSerial,
-    newline: SavedNewline,
-    encoding: SavedEncoding,
-    terminal: SavedTerminal,
-    log: SavedLog,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedSerial {
-    baud_rate: u32,
-    data_bits: &'static str,
-    parity: &'static str,
-    stop_bits: &'static str,
-    flow: &'static str,
-    read_timeout_ms: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedNewline {
-    receive: &'static str,
-    transmit: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedEncoding {
-    session: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedTerminal {
-    columns: usize,
-    rows: usize,
-    scrollback: usize,
-    local_echo: bool,
-    palette: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedLog {
-    directory: String,
-    name_template: String,
-    rotate_bytes: u64,
-    rotate_keep: u32,
-    text_encoding: &'static str,
-}
-
 /// Windows settings path. Empty or missing `APPDATA` is `None`.
 pub fn windows_settings_path(appdata: Option<&str>) -> Option<PathBuf> {
     let appdata = appdata.filter(|value| !value.is_empty())?;
     Some(PathBuf::from(appdata).join("rs-term").join("settings.toml"))
-}
-
-/// Windows keymap path. Empty or missing `APPDATA` is `None`.
-pub fn windows_keymap_path(appdata: Option<&str>) -> Option<PathBuf> {
-    let appdata = appdata.filter(|value| !value.is_empty())?;
-    Some(PathBuf::from(appdata).join("rs-term").join("keymap.toml"))
 }
 
 /// Windows log directory. Empty or missing `LOCALAPPDATA` is `None`.
@@ -493,30 +437,6 @@ pub fn load_settings_file(path: &Path) -> Result<Settings, String> {
     load_settings_str(&text)
 }
 
-/// Write `settings.toml.tmp`, `sync_all`, then rename over `path`.
-pub fn save_settings_file(path: &Path, settings: &Settings) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let tmp = tmp_path(path);
-    let body = toml::to_string_pretty(&saved(settings)).map_err(|error| error.to_string())?;
-    let mut file = File::create(&tmp).map_err(|error| error.to_string())?;
-    file.write_all(body.as_bytes())
-        .map_err(|error| error.to_string())?;
-    file.sync_all().map_err(|error| error.to_string())?;
-    drop(file);
-    fs::rename(&tmp, path).map_err(|error| {
-        let _ = fs::remove_file(&tmp);
-        error.to_string()
-    })
-}
-
-fn tmp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
-    path.with_file_name(name)
-}
-
 /// An optional enum-valued key: parsed when given, else `default`.
 fn pick<T>(
     text: Option<String>,
@@ -625,41 +545,6 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     })
 }
 
-fn saved(settings: &Settings) -> SavedSettings {
-    SavedSettings {
-        schema: 1,
-        serial: SavedSerial {
-            baud_rate: settings.serial.baud_rate,
-            data_bits: data_bits_name(settings.serial.data_bits),
-            parity: parity_name(settings.serial.parity),
-            stop_bits: stop_name(settings.serial.stop_bits),
-            flow: flow_name(settings.serial.flow),
-            read_timeout_ms: settings.serial.read_timeout_ms,
-        },
-        newline: SavedNewline {
-            receive: receive_name(settings.newline.receive),
-            transmit: transmit_name(settings.newline.transmit),
-        },
-        encoding: SavedEncoding {
-            session: encoding_name(settings.encoding),
-        },
-        terminal: SavedTerminal {
-            columns: settings.terminal.columns,
-            rows: settings.terminal.rows,
-            scrollback: settings.terminal.scrollback,
-            local_echo: settings.terminal.local_echo,
-            palette: settings.terminal.palette.clone(),
-        },
-        log: SavedLog {
-            directory: settings.log.directory.clone(),
-            name_template: settings.log.name_template.clone(),
-            rotate_bytes: settings.log.rotate_bytes,
-            rotate_keep: settings.log.rotate_keep,
-            text_encoding: "utf-8",
-        },
-    }
-}
-
 pub fn parse_data_bits(text: &str) -> Result<crate::DataBits, String> {
     match text {
         "five" => Ok(crate::DataBits::Five),
@@ -723,62 +608,6 @@ pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
     }
 }
 
-pub fn data_bits_name(value: crate::DataBits) -> &'static str {
-    match value {
-        crate::DataBits::Five => "five",
-        crate::DataBits::Six => "six",
-        crate::DataBits::Seven => "seven",
-        crate::DataBits::Eight => "eight",
-    }
-}
-
-pub fn parity_name(value: crate::Parity) -> &'static str {
-    match value {
-        crate::Parity::None => "none",
-        crate::Parity::Odd => "odd",
-        crate::Parity::Even => "even",
-    }
-}
-
-pub fn stop_name(value: crate::StopBits) -> &'static str {
-    match value {
-        crate::StopBits::One => "one",
-        crate::StopBits::Two => "two",
-    }
-}
-
-pub fn flow_name(value: crate::Flow) -> &'static str {
-    match value {
-        crate::Flow::None => "none",
-        crate::Flow::XonXoff => "xonxoff",
-        crate::Flow::RtsCts => "rtscts",
-    }
-}
-
-pub fn receive_name(value: ReceiveNewline) -> &'static str {
-    match value {
-        ReceiveNewline::Cr => "cr",
-        ReceiveNewline::CrLf => "crlf",
-        ReceiveNewline::Lf => "lf",
-        ReceiveNewline::Auto => "auto",
-    }
-}
-
-pub fn transmit_name(value: TransmitNewline) -> &'static str {
-    match value {
-        TransmitNewline::Cr => "cr",
-        TransmitNewline::CrLf => "crlf",
-        TransmitNewline::Lf => "lf",
-    }
-}
-
-pub fn encoding_name(value: SessionEncoding) -> &'static str {
-    match value {
-        SessionEncoding::Utf8 => "utf-8",
-        SessionEncoding::ShiftJis => "shift_jis",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,19 +646,11 @@ text_encoding = "utf-8"
 "#;
 
     #[test]
-    fn sample_loads_and_round_trips() {
+    fn sample_loads() {
         let loaded = load_settings_str(SAMPLE).unwrap();
         assert_eq!(loaded.encoding, SessionEncoding::ShiftJis);
         assert!(loaded.warnings.is_empty());
-        let dir = std::env::temp_dir().join(format!("rs-term-settings-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.toml");
-        save_settings_file(&path, &loaded).unwrap();
-        let again = load_settings_file(&path).unwrap();
-        assert_eq!(again.serial.baud_rate, 115_200);
-        assert_eq!(again.terminal.palette, "classic-dark");
-        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(loaded, Settings::default());
     }
 
     #[test]

@@ -23,7 +23,6 @@ const FLUSH_AFTER: Duration = Duration::from_secs(2);
 pub enum LogSession {
     Stopped,
     Running(LogTarget),
-    Paused(LogTarget),
     Failed {
         target: LogTarget,
         message: String,
@@ -68,8 +67,6 @@ pub struct Rotate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogCommand {
     Start(LogTarget),
-    Pause,
-    Resume,
     Stop,
 }
 
@@ -130,25 +127,6 @@ impl LogEngine {
     pub(crate) fn command(&mut self, command: LogCommand) -> Result<(), LogError> {
         match command {
             LogCommand::Start(target) => self.start(target),
-            LogCommand::Pause => match &self.state {
-                LogSession::Stopped => Err(LogError::NotRunning),
-                LogSession::Running(target) => {
-                    let target = target.clone();
-                    self.state = LogSession::Paused(target);
-                    Ok(())
-                }
-                LogSession::Paused(_) | LogSession::Failed { .. } => Ok(()),
-            },
-            LogCommand::Resume => match &self.state {
-                LogSession::Stopped => Err(LogError::NotRunning),
-                LogSession::Paused(target) => {
-                    let target = target.clone();
-                    self.state = LogSession::Running(target);
-                    self.flush_if_full();
-                    Ok(())
-                }
-                LogSession::Running(_) | LogSession::Failed { .. } => Ok(()),
-            },
             LogCommand::Stop => {
                 let _ = self.flush();
                 self.release_files();
@@ -219,12 +197,10 @@ impl LogEngine {
 
     fn start(&mut self, target: LogTarget) -> Result<(), LogError> {
         match &self.state {
-            LogSession::Running(current) | LogSession::Paused(current)
-                if same_target(current, &target) =>
-            {
+            LogSession::Running(current) if same_target(current, &target) => {
                 return Ok(());
             }
-            LogSession::Running(_) | LogSession::Paused(_) | LogSession::Failed { .. } => {
+            LogSession::Running(_) | LogSession::Failed { .. } => {
                 return Err(LogError::AlreadyRunning);
             }
             LogSession::Stopped => {}
@@ -298,9 +274,7 @@ impl LogEngine {
 
     fn needs_rotate(&self, incoming: u64) -> bool {
         let max = match &self.state {
-            LogSession::Running(target) | LogSession::Paused(target) => {
-                target_rotate(target).max_bytes
-            }
+            LogSession::Running(target) => target_rotate(target).max_bytes,
             _ => return false,
         };
         self.written
@@ -338,9 +312,7 @@ impl LogEngine {
 
     fn rotate(&mut self) -> Result<(), String> {
         let (path, keep) = match &self.state {
-            LogSession::Running(target) | LogSession::Paused(target) => {
-                (target_path(target), target_rotate(target).keep)
-            }
+            LogSession::Running(target) => (target_path(target), target_rotate(target).keep),
             _ => return Ok(()),
         };
         self.file.take();
@@ -359,7 +331,7 @@ impl LogEngine {
 
     fn fail(&mut self, message: String) {
         let target = match &self.state {
-            LogSession::Running(target) | LogSession::Paused(target) => target.clone(),
+            LogSession::Running(target) => target.clone(),
             LogSession::Failed { target, .. } => target.clone(),
             LogSession::Stopped => return,
         };
@@ -551,40 +523,6 @@ mod tests {
                 .starts_with("rs-term_"),
             "{path:?}"
         );
-    }
-
-    #[test]
-    fn pause_does_not_grow_the_file_and_stop_flushes() {
-        let dir = std::env::temp_dir().join(format!("rs-term-log-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("run.log");
-        let mut log = LogEngine::default();
-        log.command(LogCommand::Start(LogTarget::Text {
-            path: path.clone(),
-            append: false,
-            rotate: Rotate {
-                max_bytes: 64 * 1024,
-                keep: 2,
-            },
-            encoding: LogEncoding::Utf8,
-            plain: false,
-            bom: false,
-            timestamp: None,
-        }))
-        .unwrap();
-        log.record_text(&[TextAtom::Char('a'), TextAtom::Char('b')]);
-        log.command(LogCommand::Pause).unwrap();
-        let paused_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-        log.record_text(&[TextAtom::Char('c')]);
-        let still = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-        assert_eq!(paused_len, still);
-        log.command(LogCommand::Resume).unwrap();
-        log.command(LogCommand::Stop).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
-        assert_eq!(text, "ab");
-        assert!(!lock_path_for(&path).exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

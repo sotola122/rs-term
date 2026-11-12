@@ -126,7 +126,7 @@ The bottom row shows, from left to right:
 | frame | Baud rate and framing, e.g. `115200 8N1`; `XON/XOFF` or `RTS/CTS` is appended when flow control is on |
 | encoding | `Shift_JIS` or `UTF-8` |
 | link state | `未接続` (disconnected), `接続中` (opening), `接続` (connected), `喪失` (connection lost) |
-| log state | `LOG off`, `LOG on` (text log running), `LOG 一時停止` (paused), `LOG 失敗` (failed), `LOG bin` (binary log running) |
+| log state | `LOG off`, `LOG on` (text log running), `LOG 失敗` (failed), `LOG bin` (binary log running) |
 | `RX n` / `TX n` | Bytes received / sent |
 | message | Right-aligned. Info is plain gray, warnings are prefixed `注意:` (yellow), errors are prefixed `エラー:` (red). A message that does not fit is cut with `…`, or dropped if there is no room |
 
