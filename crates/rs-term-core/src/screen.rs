@@ -231,13 +231,17 @@ impl AmbiguousWidth {
 }
 
 /// What `auto` looks at. Kept apart from the process so it can be tested.
+/// Environment variables are not used: they are inherited, so a conhost
+/// window started from Windows Terminal or VS Code would still carry
+/// `WT_SESSION` or `TERM_PROGRAM`. The console is asked instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsoleEnv {
     pub windows: bool,
-    /// `WT_SESSION` is set (Windows Terminal).
-    pub windows_terminal: bool,
-    /// `TERM_PROGRAM` is `vscode`.
-    pub vscode: bool,
+    /// The console window is a visible `ConsoleWindowClass` window, as a real
+    /// conhost's is. A ConPTY host (Windows Terminal, VS Code, Cursor) gives
+    /// a `PseudoConsoleWindow`, which is hidden or empty, and a process
+    /// without a console has none.
+    pub visible_console_window: bool,
     /// The console output code page (`GetConsoleOutputCP`), if known.
     pub code_page: Option<u32>,
 }
@@ -246,22 +250,52 @@ impl ConsoleEnv {
     pub fn from_process() -> Self {
         Self {
             windows: cfg!(windows),
-            windows_terminal: std::env::var_os("WT_SESSION").is_some(),
-            vscode: std::env::var_os("TERM_PROGRAM").is_some_and(|value| value == "vscode"),
+            visible_console_window: console_window_visible(),
             code_page: console_output_cp(),
         }
     }
 }
 
 #[cfg(windows)]
-fn console_output_cp() -> Option<u32> {
+mod win {
+    use std::ffi::c_void;
+
+    #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn GetConsoleOutputCP() -> u32;
+        pub fn GetConsoleOutputCP() -> u32;
+        pub fn GetConsoleWindow() -> *mut c_void;
     }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        pub fn IsWindowVisible(hwnd: *mut c_void) -> i32;
+        pub fn GetClassNameW(hwnd: *mut c_void, text: *mut u16, max: i32) -> i32;
+    }
+}
+
+#[cfg(windows)]
+fn console_output_cp() -> Option<u32> {
     // SAFETY: no arguments; returns 0 when there is no console.
-    match unsafe { GetConsoleOutputCP() } {
+    match unsafe { win::GetConsoleOutputCP() } {
         0 => None,
         page => Some(page),
+    }
+}
+
+#[cfg(windows)]
+fn console_window_visible() -> bool {
+    // SAFETY: GetConsoleWindow takes no arguments and returns null without a
+    // window; the other calls accept any handle value, and the buffer is as
+    // long as the length passed.
+    unsafe {
+        let hwnd = win::GetConsoleWindow();
+        if hwnd.is_null() || win::IsWindowVisible(hwnd) == 0 {
+            return false;
+        }
+        let mut name = [0u16; 64];
+        let len = win::GetClassNameW(hwnd, name.as_mut_ptr(), name.len() as i32);
+        let len = usize::try_from(len).unwrap_or(0);
+        String::from_utf16_lossy(&name[..len]) == "ConsoleWindowClass"
     }
 }
 
@@ -270,12 +304,17 @@ fn console_output_cp() -> Option<u32> {
     None
 }
 
+#[cfg(not(windows))]
+fn console_window_visible() -> bool {
+    false
+}
+
 /// conhost with a CJK output code page (932, 936, 949, 950) draws ambiguous
-/// characters two cells wide. Windows Terminal and VS Code do not.
+/// characters two cells wide. ConPTY hosts such as Windows Terminal and VS
+/// Code do not, and their console window is a pseudo-window.
 pub fn ambiguous_wide_auto(env: &ConsoleEnv) -> bool {
     env.windows
-        && !env.windows_terminal
-        && !env.vscode
+        && env.visible_console_window
         && matches!(env.code_page, Some(932 | 936 | 949 | 950))
 }
 
@@ -965,21 +1004,20 @@ mod tests {
 
     #[test]
     fn auto_follows_the_console() {
-        let env = |windows, wt, vscode, page| ConsoleEnv {
+        let env = |windows, visible, page| ConsoleEnv {
             windows,
-            windows_terminal: wt,
-            vscode,
+            visible_console_window: visible,
             code_page: page,
         };
         for page in [932, 936, 949, 950] {
-            assert!(ambiguous_wide_auto(&env(true, false, false, Some(page))));
+            assert!(ambiguous_wide_auto(&env(true, true, Some(page))));
         }
-        assert!(!ambiguous_wide_auto(&env(true, false, false, Some(437))));
-        assert!(!ambiguous_wide_auto(&env(true, false, false, Some(65001))));
-        assert!(!ambiguous_wide_auto(&env(true, false, false, None)));
-        assert!(!ambiguous_wide_auto(&env(true, true, false, Some(932))));
-        assert!(!ambiguous_wide_auto(&env(true, false, true, Some(932))));
-        assert!(!ambiguous_wide_auto(&env(false, false, false, Some(932))));
+        assert!(!ambiguous_wide_auto(&env(true, true, Some(437))));
+        assert!(!ambiguous_wide_auto(&env(true, true, Some(65001))));
+        assert!(!ambiguous_wide_auto(&env(true, true, None)));
+        // A hidden console window is a ConPTY host (or no console at all).
+        assert!(!ambiguous_wide_auto(&env(true, false, Some(932))));
+        assert!(!ambiguous_wide_auto(&env(false, true, Some(932))));
     }
 
     #[test]
