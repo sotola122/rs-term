@@ -4,8 +4,6 @@
 
 全画面のシリアル端末です。1 つのプロセスが 1 つのポートを開きます。ペインやタブは持ちません。複数の接続は herdr、tmux、Windows Terminal で rs-term を並べて使います。
 
-設計は `docs/design-v7.md` です。`docs/design-v6.md` は GUI 版の履歴です。
-
 ## 起動
 
 ```text
