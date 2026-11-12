@@ -12,6 +12,9 @@ pub const ELLIPSIS: &str = "...";
 /// What the right side shows while the prefix is armed.
 pub const PREFIX_COMMANDS: &str = "c connect  d disconnect  r reconnect  b break  l log  L stop log  s send  f file  u baud  e encoding  p paste  ? help  q quit  Esc cancel";
 
+/// The keys alone, for when the full list does not fit.
+pub const PREFIX_KEYS: &str = "c d r b l L s f u e p ? q Esc";
+
 /// The link as the status line shows it: a word and its color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkState {
@@ -59,7 +62,8 @@ pub struct StatusView {
 /// The status line for a row `width` cells wide. The left items are always
 /// whole. The right side is the command list while the prefix is armed, else
 /// the message, else the `<prefix> ? help` hint. It sits at the right edge;
-/// if it does not fit it is cut with `...` by display width, and if even
+/// the command list falls back to the keys alone when the full list does not
+/// fit. If the text does not fit it is cut with `...` by display width, and if even
 /// `...` does not fit it is dropped.
 pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
     let normal = Style::default()
@@ -85,8 +89,17 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
         normal,
     ));
     let dim = Color::Rgb(0x80, 0x80, 0x80);
+    let left: usize = spans.iter().map(Span::width).sum();
+    let room = (width as usize).saturating_sub(left);
+    const GAP: usize = 2;
     let (text, color) = if view.prefix {
-        (PREFIX_COMMANDS.to_string(), normal.fg)
+        let full = Span::raw(PREFIX_COMMANDS).width();
+        let list = if room >= GAP + full {
+            PREFIX_COMMANDS
+        } else {
+            PREFIX_KEYS
+        };
+        (list.to_string(), normal.fg)
     } else {
         match &view.message {
             Some((severity, message)) => match severity {
@@ -104,9 +117,6 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
         }
     };
     let style = color.map_or(normal, |color| normal.fg(color));
-    let left: usize = spans.iter().map(Span::width).sum();
-    let room = (width as usize).saturating_sub(left);
-    const GAP: usize = 2;
     let full = Span::raw(text.as_str()).width();
     if room >= GAP + full {
         spans.push(Span::styled(" ".repeat(room - full), normal));
@@ -284,18 +294,48 @@ mod tests {
         let row = render(&view, 120);
         assert!(row.starts_with(&left), "{row:?}");
         assert!(!row.contains("port busy"), "{row:?}");
-        // 120 - 73 = 47 cells: 2 gap, 3 for the dots, 42 for text.
-        let expect = format!("{}...", &PREFIX_COMMANDS[..42]);
-        assert!(row.ends_with(&expect), "{row:?}");
-        assert!(row.contains("c connect  d disconnect"), "{row:?}");
+        // 120 - 73 = 47 cells: the full list (137) does not fit, the keys do.
+        assert!(row.ends_with(&format!("  {PREFIX_KEYS}")), "{row:?}");
+        assert!(!row.contains("..."), "{row:?}");
         assert_eq!(cells(&row), 120);
-        // Room for everything: no dots.
+        // Room for everything: the full list, no dots.
         let row = render(&view, 250);
         assert!(row.ends_with("q quit  Esc cancel"), "{row:?}");
+        assert!(row.contains("c connect  d disconnect"), "{row:?}");
         assert!(!row.contains("..."), "{row:?}");
         // The message returns once the prefix is released.
         view.prefix = false;
         assert!(render(&view, 120).ends_with("Error: port busy"));
+    }
+
+    #[test]
+    fn the_prefix_list_falls_back_to_keys_and_then_to_dots() {
+        let mut view = sample(None);
+        view.prefix = true;
+        let left = cells(&format!("PREFIX  {LEFT}"));
+        assert_eq!(left, 73);
+        let keys = cells(PREFIX_KEYS);
+        let full = cells(PREFIX_COMMANDS);
+        assert_eq!((keys, full), (29, 137));
+        // The widest row where the full list still fits, and one cell less.
+        let row = render(&view, (left + 2 + full) as u16);
+        assert!(row.ends_with(&format!("  {PREFIX_COMMANDS}")), "{row:?}");
+        assert_eq!(cells(&row), left + 2 + full);
+        let row = render(&view, (left + 1 + full) as u16);
+        assert!(row.ends_with(&format!("  {PREFIX_KEYS}")), "{row:?}");
+        // The keys fit exactly, and one cell less cuts them.
+        let row = render(&view, (left + 2 + keys) as u16);
+        assert_eq!(row, format!("PREFIX  {LEFT}  {PREFIX_KEYS}"));
+        let row = render(&view, (left + 1 + keys) as u16);
+        assert!(row.ends_with("  c d r b l L s f u e p ? q..."), "{row:?}");
+        assert_eq!(cells(&row), left + 1 + keys);
+        // At 80 columns only seven cells are left after the left items.
+        let row = render(&view, 80);
+        assert_eq!(row, format!("PREFIX  {LEFT}  c ..."));
+        assert_eq!(cells(&row), 80);
+        // The left items are never cut, and nothing is shown without room.
+        let row = render(&view, left as u16 + 4);
+        assert_eq!(row.trim_end(), format!("PREFIX  {LEFT}"));
     }
 
     #[test]

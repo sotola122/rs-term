@@ -128,7 +128,7 @@ The bottom row shows, from left to right:
 | link state | `disconnected`, `connecting` (opening), `connected`, `lost` (connection lost) |
 | log state | `LOG off`, `LOG on` (text log running), `LOG failed`, `LOG bin` (binary log running) |
 | `RX n` / `TX n` | Bytes received / sent |
-| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`). Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
+| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`), or only their keys (`c d r b l L s f u e p ? q Esc`) when the full list does not fit. Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
 
 ## Configuration
 
