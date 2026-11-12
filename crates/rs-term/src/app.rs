@@ -1,6 +1,7 @@
 //! One serial session and the modal commands around it.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,7 +14,7 @@ use rs_term_core::{
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
     OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding,
-    Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
+    SessionError, Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
@@ -686,27 +687,9 @@ impl App {
     }
 
     fn send_file(&mut self, path: &str) {
-        let meta = match std::fs::metadata(path) {
-            Ok(meta) => meta,
-            Err(error) => {
-                self.session
-                    .set_message(Message::error(format!("ファイルを読めない（OS: {error}）")));
-                return;
-            }
-        };
-        if meta.len() > MAX_PENDING as u64 {
-            self.session.set_message(Message::error(format!(
-                "{} バイトは上限 {} MiB を超えるので送らなかった",
-                meta.len(),
-                MAX_PENDING / (1024 * 1024)
-            )));
-            return;
-        }
-        match std::fs::read(path) {
+        match read_send_file(Path::new(path)) {
             Ok(bytes) => self.send_input(Input::Bytes(bytes)),
-            Err(error) => self
-                .session
-                .set_message(Message::error(format!("ファイルを読めない（OS: {error}）"))),
+            Err(message) => self.session.set_message(Message::error(message)),
         }
     }
 
@@ -794,6 +777,40 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
     }
 }
 
+/// Reads a file to send. Only a regular file of at most `MAX_PENDING` bytes
+/// is accepted: FIFOs and devices report a length of 0 and never end, and a
+/// file can grow after the length check, so the read itself is capped too.
+fn read_send_file(path: &Path) -> Result<Vec<u8>, String> {
+    let read_error = |error: std::io::Error| format!("ファイルを読めない（OS: {error}）");
+    let meta = std::fs::metadata(path).map_err(read_error)?;
+    if !meta.is_file() {
+        return Err("通常のファイルではないので送らなかった".into());
+    }
+    if meta.len() > MAX_PENDING as u64 {
+        return Err(too_large(meta.len() as usize));
+    }
+    let file = std::fs::File::open(path).map_err(read_error)?;
+    read_at_most(file, MAX_PENDING)?.ok_or_else(|| too_large(MAX_PENDING + 1))
+}
+
+/// Everything `reader` yields, or `None` if it yields more than `limit` bytes.
+fn read_at_most(reader: impl Read, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("ファイルを読めない（OS: {error}）"))?;
+    Ok((bytes.len() <= limit).then_some(bytes))
+}
+
+fn too_large(bytes: usize) -> String {
+    SessionError::TooLarge {
+        bytes,
+        limit: MAX_PENDING,
+    }
+    .to_string()
+}
+
 fn baud_changed_text(baud: u32) -> String {
     format!("ボーレートを {baud} にした")
 }
@@ -874,6 +891,51 @@ fn encoding_token(encoding: SessionEncoding) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rs-term-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn send_file_reads_a_regular_file() {
+        let dir = temp_dir("send-ok");
+        let path = dir.join("a.bin");
+        std::fs::write(&path, b"hello ").unwrap();
+        assert_eq!(read_send_file(&path).unwrap(), b"hello ");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_file_rejects_a_directory_and_a_missing_path() {
+        let dir = temp_dir("send-dir");
+        let error = read_send_file(&dir).unwrap_err();
+        assert!(error.contains("通常のファイルではない"), "{error}");
+        let error = read_send_file(&dir.join("none")).unwrap_err();
+        assert!(error.contains("ファイルを読めない"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn send_file_rejects_an_oversized_file_before_reading() {
+        let dir = temp_dir("send-big");
+        let path = dir.join("big.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_PENDING as u64 + 1).unwrap();
+        drop(file);
+        let error = read_send_file(&path).unwrap_err();
+        assert!(error.contains("上限 16 MiB"), "{error}");
+        assert!(error.contains(&(MAX_PENDING + 1).to_string()), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_read_stops_at_the_limit_even_for_an_endless_source() {
+        assert_eq!(read_at_most(&b"abc"[..], 3).unwrap(), Some(b"abc".to_vec()));
+        assert_eq!(read_at_most(&b"abcd"[..], 3).unwrap(), None);
+        assert_eq!(read_at_most(std::io::repeat(0), 1000).unwrap(), None);
+    }
 
     #[test]
     fn baud_change_has_a_confirmation_text() {
