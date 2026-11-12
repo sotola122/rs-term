@@ -548,15 +548,20 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
         Command::Shutdown => Step::Stop,
         Command::Cancel { generation: next } => {
             *ctx.generation = next;
-            ctx.pending.clear();
-            *ctx.pending_at = 0;
+            drop_pending(ctx, out);
             Step::Continue
         }
         Command::Write {
             generation: write_generation,
             bytes,
         } => {
-            if write_generation != *ctx.generation || bytes.is_empty() {
+            if bytes.is_empty() {
+                return Step::Continue;
+            }
+            if write_generation != *ctx.generation {
+                out.status(IoEvent::TxDropped {
+                    bytes: bytes.len() as u64,
+                });
                 return Step::Continue;
             }
             if *ctx.pending_at >= ctx.pending.len() {
@@ -571,6 +576,9 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
                         bytes.len()
                     ),
                 }));
+                out.status(IoEvent::TxDropped {
+                    bytes: bytes.len() as u64,
+                });
                 return Step::Continue;
             }
             ctx.pending.extend(bytes);
@@ -605,6 +613,17 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
     }
 }
 
+/// Forget the bytes still waiting for the port and tell the session they
+/// will never be sent, so the TX count does not include them.
+fn drop_pending(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
+    let rest = ctx.pending.len().saturating_sub(*ctx.pending_at);
+    if rest > 0 {
+        out.status(IoEvent::TxDropped { bytes: rest as u64 });
+    }
+    ctx.pending.clear();
+    *ctx.pending_at = 0;
+}
+
 fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
     if ctx.break_until.is_some_and(|until| Instant::now() >= until) {
         if let Err(error) = ctx.port.set_break(false) {
@@ -634,8 +653,7 @@ fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
                         ctx.pending.len() - *ctx.pending_at
                     ),
                 }));
-                ctx.pending.clear();
-                *ctx.pending_at = 0;
+                drop_pending(ctx, out);
             }
         }
     }
