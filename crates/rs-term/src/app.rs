@@ -39,6 +39,9 @@ pub enum Modal {
 pub struct ModalBody {
     pub title: &'static str,
     pub lines: Vec<(String, bool)>,
+    /// How many leading lines stay on screen when the rest scrolls to keep
+    /// the selected line visible (the picker's input and notes).
+    pub pinned: usize,
 }
 
 pub struct App {
@@ -203,6 +206,7 @@ impl App {
         if let Some(error) = &self.modal_error {
             lines.push((error.clone(), false));
         }
+        let mut pinned = None;
         let title = match modal {
             Modal::Picker => {
                 lines.push((format!("> {}", self.input), false));
@@ -213,6 +217,7 @@ impl App {
                 if paths.is_empty() && self.input.is_empty() {
                     lines.push(("ポートが無い。パスを入力して Enter".into(), false));
                 }
+                pinned = Some(lines.len());
                 for (index, path) in paths.iter().enumerate() {
                     lines.push((
                         path.clone(),
@@ -247,7 +252,12 @@ impl App {
                 "エンコーディング"
             }
         };
-        Some(ModalBody { title, lines })
+        let pinned = pinned.unwrap_or(lines.len());
+        Some(ModalBody {
+            title,
+            lines,
+            pinned,
+        })
     }
 
     pub fn on_resize(&mut self, width: u16, height: u16) {
@@ -294,6 +304,7 @@ impl App {
                     self.input.push(ch);
                 }
             }
+            self.filter_changed();
             return;
         }
         self.prefix_armed = false;
@@ -399,11 +410,23 @@ impl App {
             KeyCode::Enter => self.confirm_modal(),
             KeyCode::Backspace if !ctrl => {
                 self.input.pop();
+                self.filter_changed();
             }
             KeyCode::Up if picker => self.move_picker(-1),
             KeyCode::Down if picker => self.move_picker(1),
-            KeyCode::Char(ch) if !ctrl && !alt => self.input.push(ch),
+            KeyCode::Char(ch) if !ctrl && !alt => {
+                self.input.push(ch);
+                self.filter_changed();
+            }
             _ => {}
+        }
+    }
+
+    /// The input text changed. In the picker it is the filter, so the
+    /// selection goes back to the top of the new list.
+    fn filter_changed(&mut self) {
+        if self.modal == Some(Modal::Picker) {
+            self.picker_index = 0;
         }
     }
 
@@ -585,7 +608,7 @@ impl App {
                 .get(self.picker_index.min(paths.len().saturating_sub(1)))
                 .cloned()
             else {
-                self.modal_error = Some("ポートを選ぶか、パスを入力する".into());
+                // Nothing listed and nothing typed: nothing to do (§6).
                 return;
             };
             path
@@ -996,5 +1019,59 @@ mod tests {
         assert!(text.contains("settings.toml が壊れている"), "{text}");
         assert!(!text.contains("ログを開始した"), "{text}");
         assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
+    }
+
+    fn picker_app(ports: usize) -> App {
+        let mut app = App::with_settings(Cli::default(), Settings::default(), None);
+        app.ports = (0..ports).map(|i| format!("/dev/ttyS{i}")).collect();
+        app.port_note = None;
+        app.picker_index = 0;
+        app.input.clear();
+        app.modal = Some(Modal::Picker);
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn picker_enter_with_nothing_listed_and_nothing_typed_does_nothing() {
+        let mut app = picker_app(0);
+        app.session.clear_note();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.modal, Some(Modal::Picker));
+        assert!(app.modal_error.is_none());
+        assert!(app.session.note().is_none());
+        assert!(matches!(app.session.link(), Link::Disconnected));
+    }
+
+    #[test]
+    fn picker_selection_returns_to_the_top_when_the_filter_changes() {
+        let mut app = picker_app(30);
+        for _ in 0..7 {
+            press(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.picker_index, 7);
+        press(&mut app, KeyCode::Char('S'));
+        assert_eq!(app.picker_index, 0);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.picker_index, 0);
+        app.picker_index = 4;
+        app.on_paste("ttyS1".into());
+        assert_eq!(app.picker_index, 0);
+        // The index is also clamped to a shrunken list.
+        app.picker_index = 99;
+        let selected = app
+            .modal_body()
+            .unwrap()
+            .lines
+            .iter()
+            .filter(|(_, selected)| *selected)
+            .count();
+        assert_eq!(selected, 1);
     }
 }

@@ -200,9 +200,9 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
     let area = centered(frame.area(), 68, height);
     frame.render_widget(Clear, area);
     let inner = area.width.saturating_sub(2) as usize;
-    let lines: Vec<Line> = body
-        .lines
-        .iter()
+    let rows = area.height.saturating_sub(2) as usize;
+    let lines: Vec<Line> = visible_lines(body, rows)
+        .into_iter()
         .map(|(text, selected)| {
             let style = if *selected {
                 Style::default()
@@ -222,6 +222,24 @@ fn draw_modal(frame: &mut Frame, body: &ModalBody) {
         .block(Block::bordered().title(body.title))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// The lines to draw in `rows` rows. When they do not all fit, the pinned
+/// head stays and the rest is a window that ends at the selected line, so the
+/// selection is always on screen.
+fn visible_lines(body: &ModalBody, rows: usize) -> Vec<&(String, bool)> {
+    if body.lines.len() <= rows {
+        return body.lines.iter().collect();
+    }
+    let pinned = body.pinned.min(body.lines.len());
+    let (head, list) = body.lines.split_at(pinned);
+    let room = rows.saturating_sub(pinned).max(1);
+    let selected = list.iter().position(|(_, selected)| *selected).unwrap_or(0);
+    let start = (selected + 1).saturating_sub(room);
+    head.iter()
+        .chain(list.iter().skip(start).take(room))
+        .take(rows)
+        .collect()
 }
 
 /// `text` if it fits in `width` cells, otherwise `…` and its tail, so the end
@@ -355,6 +373,7 @@ mod tests {
                 ("ログファイルのパス".into(), false),
                 (format!("> {long}"), false),
             ],
+            pinned: 2,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| draw_modal(frame, &body)).unwrap();
@@ -366,5 +385,50 @@ mod tests {
         assert!(row.contains("/end.log█"), "{row:?}");
         assert!(Line::from(row.trim_end()).width() <= 80);
         assert_eq!(screen.iter().filter(|row| row.contains("ddd")).count(), 1);
+    }
+
+    fn picker_body(count: usize, selected: usize) -> ModalBody {
+        let mut lines = vec![("> ".to_string(), false)];
+        for index in 0..count {
+            lines.push((format!("/dev/ttyS{index}"), index == selected));
+        }
+        ModalBody {
+            title: "ポート",
+            lines,
+            pinned: 1,
+        }
+    }
+
+    fn render_modal(body: &ModalBody) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw_modal(frame, body)).unwrap();
+        rows(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn the_picker_scrolls_to_keep_the_selection_visible() {
+        for selected in [0, 5, 12, 13, 14, 25, 39] {
+            let screen = render_modal(&picker_body(40, selected));
+            let want = format!("/dev/ttyS{selected} ");
+            let hits: Vec<&String> = screen
+                .iter()
+                .filter(|row| format!("{} ", row.trim_end()).contains(&want))
+                .collect();
+            assert_eq!(hits.len(), 1, "selected {selected}: {screen:#?}");
+            assert!(
+                screen.iter().any(|row| row.contains("> ")),
+                "the input line must stay: {screen:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_picker_list_is_not_scrolled() {
+        let screen = render_modal(&picker_body(3, 2));
+        for index in 0..3 {
+            assert!(screen
+                .iter()
+                .any(|row| row.contains(&format!("/dev/ttyS{index}"))));
+        }
     }
 }
