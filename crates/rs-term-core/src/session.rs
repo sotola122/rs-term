@@ -400,7 +400,18 @@ impl Session {
         }
         match opened.result {
             Ok(port) => {
-                let (worker, channels) = serial::spawn(port, current);
+                let (worker, channels) = match serial::spawn(port, current) {
+                    Ok(started) => started,
+                    Err(error) => {
+                        self.link = Link::Disconnected;
+                        let error = OpenError::Port(error);
+                        self.note = Some(Message::error(format!(
+                            "{} を開けない: {error}",
+                            opened.params.path
+                        )));
+                        return Err(error);
+                    }
+                };
                 self.worker = Some(worker);
                 // A line setting changed while the port was opening (the
                 // baud dialog) waits in `self.params`; the port was opened

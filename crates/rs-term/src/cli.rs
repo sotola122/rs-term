@@ -1,5 +1,6 @@
 //! `rs-term [PORT] -b BAUD --data --parity --stop --flow -e sjis|utf8 --log PATH`.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use rs_term_core::{DataBits, Flow, Parity, SessionEncoding, StopBits};
@@ -47,6 +48,27 @@ pub struct Cli {
     pub log: Option<PathBuf>,
     pub prefix: Prefix,
     pub help: bool,
+}
+
+/// `parse` for the raw process arguments. An argument that is not valid
+/// Unicode is a usage error, not a panic.
+pub fn parse_os<I>(args: I) -> Result<Cli, String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut texts = Vec::new();
+    for arg in args {
+        match arg.into_string() {
+            Ok(text) => texts.push(text),
+            Err(raw) => {
+                return Err(format!(
+                    "引数が UTF-8 の文字列ではない: {}",
+                    raw.to_string_lossy()
+                ))
+            }
+        }
+    }
+    parse(texts)
 }
 
 pub fn parse<I, S>(args: I) -> Result<Cli, String>
@@ -313,5 +335,32 @@ mod tests {
             let error = parse(["--prefix", spec]).unwrap_err();
             assert!(error.contains("プレフィックス"), "{spec}: {error}");
         }
+    }
+
+    #[cfg(unix)]
+    fn not_unicode() -> OsString {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(vec![b'/', b'd', 0xFF, 0xFE])
+    }
+
+    #[cfg(windows)]
+    fn not_unicode() -> OsString {
+        use std::os::windows::ffi::OsStringExt;
+        OsString::from_wide(&[0x2F, 0xD800])
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_a_usage_error() {
+        let error = parse_os([OsString::from("-b"), not_unicode()]).unwrap_err();
+        assert!(error.contains("UTF-8"), "{error}");
+        let error = parse_os([not_unicode()]).unwrap_err();
+        assert!(error.contains("UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn plain_os_arguments_parse_like_strings() {
+        let cli = parse_os(["--baud=9600", "COM3"].map(OsString::from)).unwrap();
+        assert_eq!(cli.baud, Some(9600));
+        assert_eq!(cli.port.as_deref(), Some("COM3"));
     }
 }

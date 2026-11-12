@@ -450,21 +450,40 @@ pub(crate) struct Channels {
     pub status: async_mpsc::UnboundedReceiver<IoEvent>,
 }
 
-pub(crate) fn spawn(port: Box<dyn PortIo>, generation: u64) -> (WorkerHandle, Channels) {
+/// Start the port thread. A thread that cannot be created is an error, and
+/// the port is closed again (it was moved into the thread body).
+pub(crate) fn spawn(
+    port: Box<dyn PortIo>,
+    generation: u64,
+) -> Result<(WorkerHandle, Channels), PortError> {
+    spawn_with(port, generation, |body| {
+        thread::Builder::new()
+            .name("rs-term-serial".into())
+            .spawn(body)
+    })
+}
+
+type ThreadBody = Box<dyn FnOnce() + Send>;
+
+fn spawn_with(
+    port: Box<dyn PortIo>,
+    generation: u64,
+    start: impl FnOnce(ThreadBody) -> io::Result<JoinHandle<()>>,
+) -> Result<(WorkerHandle, Channels), PortError> {
     let (data_tx, data_rx) = async_mpsc::channel(DATA_DEPTH);
     let (status_tx, status_rx) = async_mpsc::unbounded();
     let (cmd_tx, cmd_rx) = mpsc::sync_channel(COMMAND_DEPTH);
-    let join = thread::Builder::new()
-        .name("rs-term-serial".into())
-        .spawn(move || {
-            let outlet = Outlet {
-                data: data_tx,
-                status: status_tx,
-            };
-            worker_loop(port, outlet, cmd_rx, generation)
-        })
-        .expect("spawn serial thread");
-    (
+    let join = start(Box::new(move || {
+        let outlet = Outlet {
+            data: data_tx,
+            status: status_tx,
+        };
+        worker_loop(port, outlet, cmd_rx, generation)
+    }))
+    .map_err(|error| PortError::Io {
+        message: format!("ポートのスレッドを作れない（OS: {error}）"),
+    })?;
+    Ok((
         WorkerHandle {
             commands: cmd_tx,
             join,
@@ -473,7 +492,7 @@ pub(crate) fn spawn(port: Box<dyn PortIo>, generation: u64) -> (WorkerHandle, Ch
             data: data_rx,
             status: status_rx,
         },
-    )
+    ))
 }
 
 struct Outlet {
@@ -769,6 +788,52 @@ fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct DropFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl PortIo for DropFlag {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::TimedOut.into())
+        }
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn apply(&mut self, _: &SerialParams) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn set_dtr(&mut self, _: bool) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn set_rts(&mut self, _: bool) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn set_break(&mut self, _: bool) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn pins(&mut self) -> Result<PinState, PortError> {
+            Err(PortError::Closed)
+        }
+    }
+
+    #[test]
+    fn a_thread_that_cannot_start_is_an_error_and_closes_the_port() {
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let port = Box::new(DropFlag(dropped.clone()));
+        let result = spawn_with(port, 1, |_body| Err(io::Error::other("resource exhausted")));
+        let message = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("the spawn must fail"),
+        };
+        assert!(message.contains("スレッドを作れない"), "{message}");
+        assert!(message.contains("resource exhausted"), "{message}");
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
 
     #[test]
     fn identity_requires_vid_pid_and_serial() {
