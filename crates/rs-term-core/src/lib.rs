@@ -15,7 +15,7 @@ pub use config::{
     classic_dark, light_palette, load_settings_file, load_settings_str, log_dir_from_env,
     palette_by_name, resolve_log_dir, save_settings_file, settings_path, settings_path_from_env,
     windows_keymap_path, windows_log_dir, windows_settings_path, DirEnv, LogSettings, OsKind,
-    SerialSettings, Settings, TerminalPalette, TerminalSettings, UiSettings,
+    SerialSettings, Settings, TerminalPalette, TerminalSettings,
 };
 
 /// TOML names of the domain enums, for files the UI owns (layout.toml).

@@ -1,15 +1,18 @@
 //! `settings.toml` schema 1.
 //!
-//! A missing schema, a schema other than 1, an unknown key, a syntax error, or
-//! an out-of-range number rejects the whole file. The file is not rewritten.
-//! `ui.theme_mode` and `terminal.palette` are the exception the design calls
-//! out: an unknown value falls back and is reported, and the rest of the file
-//! still loads.
+//! Every table and key is optional; an omitted one takes the built-in default.
+//! A schema other than 1, an unknown key, a syntax error, or an out-of-range
+//! number rejects the whole file. The file is not rewritten.
+//! Two things do not reject the file. An unknown `terminal.palette` falls back
+//! and is reported. The GUI-era keys the TUI never used (`serial.reconnect`,
+//! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` table) are ignored
+//! and reported in one warning.
 
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
@@ -172,7 +175,6 @@ pub struct Settings {
     pub newline: Newline,
     pub encoding: SessionEncoding,
     pub terminal: TerminalSettings,
-    pub ui: UiSettings,
     pub log: LogSettings,
     pub warnings: Vec<String>,
 }
@@ -185,8 +187,6 @@ pub struct SerialSettings {
     pub stop_bits: crate::StopBits,
     pub flow: crate::Flow,
     pub read_timeout_ms: u64,
-    pub reconnect: bool,
-    pub reopen_on_start: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,17 +196,6 @@ pub struct TerminalSettings {
     pub scrollback: usize,
     pub local_echo: bool,
     pub palette: String,
-    pub font_family: String,
-    pub font_size_px: f32,
-    pub font_fallbacks: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UiSettings {
-    pub theme_mode: String,
-    pub font_family: String,
-    pub font_size_px: f32,
-    pub ligatures: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -227,8 +216,6 @@ impl Default for Settings {
                 stop_bits: crate::StopBits::One,
                 flow: crate::Flow::None,
                 read_timeout_ms: 20,
-                reconnect: false,
-                reopen_on_start: false,
             },
             newline: Newline {
                 receive: ReceiveNewline::Auto,
@@ -241,15 +228,6 @@ impl Default for Settings {
                 scrollback: 10_000,
                 local_echo: false,
                 palette: "classic-dark".into(),
-                font_family: String::new(),
-                font_size_px: 14.0,
-                font_fallbacks: vec!["Yu Gothic".into(), "MS Gothic".into()],
-            },
-            ui: UiSettings {
-                theme_mode: "dark".into(),
-                font_family: String::new(),
-                font_size_px: 16.0,
-                ligatures: false,
             },
             log: LogSettings {
                 directory: String::new(),
@@ -262,74 +240,73 @@ impl Default for Settings {
     }
 }
 
+/// Every table and key is optional: an omitted one takes the built-in
+/// default. The GUI-era keys the TUI never read are still accepted (and
+/// ignored) so an old file keeps loading; they are listed in a warning.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSettings {
-    schema: u32,
+    schema: Option<u32>,
+    #[serde(default)]
     serial: RawSerial,
+    #[serde(default)]
     newline: RawNewline,
+    #[serde(default)]
     encoding: RawEncoding,
+    #[serde(default)]
     terminal: RawTerminal,
-    ui: RawUi,
+    #[serde(default)]
     log: RawLog,
+    ui: Option<IgnoredAny>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSerial {
-    baud_rate: u32,
-    data_bits: String,
-    parity: String,
-    stop_bits: String,
-    flow: String,
-    read_timeout_ms: u64,
-    reconnect: bool,
-    reopen_on_start: bool,
+    baud_rate: Option<u32>,
+    data_bits: Option<String>,
+    parity: Option<String>,
+    stop_bits: Option<String>,
+    flow: Option<String>,
+    read_timeout_ms: Option<u64>,
+    reconnect: Option<IgnoredAny>,
+    reopen_on_start: Option<IgnoredAny>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawNewline {
-    receive: String,
-    transmit: String,
+    receive: Option<String>,
+    transmit: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEncoding {
-    session: String,
+    session: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTerminal {
-    columns: usize,
-    rows: usize,
-    scrollback: usize,
-    local_echo: bool,
-    palette: String,
-    font_family: String,
-    font_size_px: f32,
-    font_fallbacks: Vec<String>,
+    columns: Option<usize>,
+    rows: Option<usize>,
+    scrollback: Option<usize>,
+    local_echo: Option<bool>,
+    palette: Option<String>,
+    font_family: Option<IgnoredAny>,
+    font_size_px: Option<IgnoredAny>,
+    font_fallbacks: Option<IgnoredAny>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawUi {
-    theme_mode: String,
-    font_family: String,
-    font_size_px: f32,
-    ligatures: bool,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawLog {
-    directory: String,
-    name_template: String,
-    rotate_bytes: u64,
-    rotate_keep: u32,
-    text_encoding: String,
+    directory: Option<String>,
+    name_template: Option<String>,
+    rotate_bytes: Option<u64>,
+    rotate_keep: Option<u32>,
+    text_encoding: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,7 +316,6 @@ struct SavedSettings {
     newline: SavedNewline,
     encoding: SavedEncoding,
     terminal: SavedTerminal,
-    ui: SavedUi,
     log: SavedLog,
 }
 
@@ -351,8 +327,6 @@ struct SavedSerial {
     stop_bits: &'static str,
     flow: &'static str,
     read_timeout_ms: u64,
-    reconnect: bool,
-    reopen_on_start: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -373,17 +347,6 @@ struct SavedTerminal {
     scrollback: usize,
     local_echo: bool,
     palette: String,
-    font_family: String,
-    font_size_px: f32,
-    font_fallbacks: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedUi {
-    theme_mode: String,
-    font_family: String,
-    font_size_px: f32,
-    ligatures: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -519,8 +482,8 @@ fn platform_log_dir(env: &DirEnv) -> Option<PathBuf> {
 pub fn load_settings_str(text: &str) -> Result<Settings, String> {
     let raw: RawSettings =
         toml::from_str(text).map_err(|error| format!("TOML として読めない: {error}"))?;
-    if raw.schema != 1 {
-        return Err(format!("schema {} は読めない（1 だけ）", raw.schema));
+    if let Some(schema) = raw.schema.filter(|schema| *schema != 1) {
+        return Err(format!("schema {schema} は読めない（1 だけ）"));
     }
     interpret(raw)
 }
@@ -554,89 +517,109 @@ fn tmp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// An optional enum-valued key: parsed when given, else `default`.
+fn pick<T>(
+    text: Option<String>,
+    default: T,
+    parse: fn(&str) -> Result<T, String>,
+) -> Result<T, String> {
+    match text {
+        Some(text) => parse(&text),
+        None => Ok(default),
+    }
+}
+
 fn interpret(raw: RawSettings) -> Result<Settings, String> {
-    if !(1..=4_000_000).contains(&raw.serial.baud_rate) {
+    let defaults = Settings::default();
+    let (serial, terminal, log) = (raw.serial, raw.terminal, raw.log);
+    let baud_rate = serial.baud_rate.unwrap_or(defaults.serial.baud_rate);
+    if !(1..=4_000_000).contains(&baud_rate) {
         return Err("serial.baud_rate が範囲外（1〜4000000）".into());
     }
     // Commands are taken between reads, so the timeout bounds key latency
     // and the stop time (review N13).
-    if raw.serial.read_timeout_ms == 0 || raw.serial.read_timeout_ms > 100 {
+    let read_timeout_ms = serial
+        .read_timeout_ms
+        .unwrap_or(defaults.serial.read_timeout_ms);
+    if read_timeout_ms == 0 || read_timeout_ms > 100 {
         return Err("serial.read_timeout_ms が範囲外（1〜100）".into());
     }
-    if raw.terminal.scrollback > 100_000 {
+    let scrollback = terminal.scrollback.unwrap_or(defaults.terminal.scrollback);
+    if scrollback > 100_000 {
         return Err("terminal.scrollback が範囲外（0〜100000）".into());
     }
-    if raw.terminal.columns == 0
-        || raw.terminal.rows == 0
-        || raw.terminal.columns > 500
-        || raw.terminal.rows > 500
-    {
+    let columns = terminal.columns.unwrap_or(defaults.terminal.columns);
+    let rows = terminal.rows.unwrap_or(defaults.terminal.rows);
+    if !(1..=500).contains(&columns) || !(1..=500).contains(&rows) {
         return Err("terminal.columns または rows が範囲外（1〜500）".into());
     }
-    if !(1.0..=72.0).contains(&raw.terminal.font_size_px)
-        || !(1.0..=72.0).contains(&raw.ui.font_size_px)
-    {
-        return Err("font_size_px が範囲外（1〜72）".into());
-    }
-    if !(64 * 1024..=1024 * 1024 * 1024).contains(&raw.log.rotate_bytes) {
+    let rotate_bytes = log.rotate_bytes.unwrap_or(defaults.log.rotate_bytes);
+    if !(64 * 1024..=1024 * 1024 * 1024).contains(&rotate_bytes) {
         return Err("log.rotate_bytes が範囲外（64 KiB〜1 GiB）".into());
     }
-    if !(1..=20).contains(&raw.log.rotate_keep) {
+    let rotate_keep = log.rotate_keep.unwrap_or(defaults.log.rotate_keep);
+    if !(1..=20).contains(&rotate_keep) {
         return Err("log.rotate_keep が範囲外（1〜20）".into());
     }
-    if raw.log.text_encoding != "utf-8" {
+    if log
+        .text_encoding
+        .as_deref()
+        .is_some_and(|name| name != "utf-8")
+    {
         return Err("log.text_encoding は utf-8 だけ".into());
     }
     let mut warnings = Vec::new();
-    let mut palette = raw.terminal.palette;
+    let legacy: Vec<&str> = [
+        ("serial.reconnect", serial.reconnect.is_some()),
+        ("serial.reopen_on_start", serial.reopen_on_start.is_some()),
+        ("terminal.font_family", terminal.font_family.is_some()),
+        ("terminal.font_size_px", terminal.font_size_px.is_some()),
+        ("terminal.font_fallbacks", terminal.font_fallbacks.is_some()),
+        ("ui", raw.ui.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, present)| present.then_some(name))
+    .collect();
+    if !legacy.is_empty() {
+        warnings.push(format!("使わない設定を無視した: {}", legacy.join(", ")));
+    }
+    let mut palette = terminal.palette.unwrap_or(defaults.terminal.palette);
     if palette_by_name(&palette).is_none() {
         warnings.push(format!(
             "terminal.palette `{palette}` は未知なので classic-dark"
         ));
         palette = "classic-dark".into();
     }
-    let mut theme_mode = raw.ui.theme_mode;
-    if theme_mode != "light" && theme_mode != "dark" {
-        warnings.push(format!("ui.theme_mode `{theme_mode}` は未知なので dark"));
-        theme_mode = "dark".into();
-    }
     Ok(Settings {
         serial: SerialSettings {
-            baud_rate: raw.serial.baud_rate,
-            data_bits: parse_data_bits(&raw.serial.data_bits)?,
-            parity: parse_parity(&raw.serial.parity)?,
-            stop_bits: parse_stop(&raw.serial.stop_bits)?,
-            flow: parse_flow(&raw.serial.flow)?,
-            read_timeout_ms: raw.serial.read_timeout_ms,
-            reconnect: raw.serial.reconnect,
-            reopen_on_start: raw.serial.reopen_on_start,
+            baud_rate,
+            data_bits: pick(serial.data_bits, defaults.serial.data_bits, parse_data_bits)?,
+            parity: pick(serial.parity, defaults.serial.parity, parse_parity)?,
+            stop_bits: pick(serial.stop_bits, defaults.serial.stop_bits, parse_stop)?,
+            flow: pick(serial.flow, defaults.serial.flow, parse_flow)?,
+            read_timeout_ms,
         },
         newline: Newline {
-            receive: parse_receive(&raw.newline.receive)?,
-            transmit: parse_transmit(&raw.newline.transmit)?,
+            receive: pick(raw.newline.receive, defaults.newline.receive, parse_receive)?,
+            transmit: pick(
+                raw.newline.transmit,
+                defaults.newline.transmit,
+                parse_transmit,
+            )?,
         },
-        encoding: parse_encoding(&raw.encoding.session)?,
+        encoding: pick(raw.encoding.session, defaults.encoding, parse_encoding)?,
         terminal: TerminalSettings {
-            columns: raw.terminal.columns,
-            rows: raw.terminal.rows,
-            scrollback: raw.terminal.scrollback,
-            local_echo: raw.terminal.local_echo,
+            columns,
+            rows,
+            scrollback,
+            local_echo: terminal.local_echo.unwrap_or(defaults.terminal.local_echo),
             palette,
-            font_family: raw.terminal.font_family,
-            font_size_px: raw.terminal.font_size_px,
-            font_fallbacks: raw.terminal.font_fallbacks,
-        },
-        ui: UiSettings {
-            theme_mode,
-            font_family: raw.ui.font_family,
-            font_size_px: raw.ui.font_size_px,
-            ligatures: raw.ui.ligatures,
         },
         log: LogSettings {
-            directory: raw.log.directory,
-            name_template: raw.log.name_template,
-            rotate_bytes: raw.log.rotate_bytes,
-            rotate_keep: raw.log.rotate_keep,
+            directory: log.directory.unwrap_or(defaults.log.directory),
+            name_template: log.name_template.unwrap_or(defaults.log.name_template),
+            rotate_bytes,
+            rotate_keep,
         },
         warnings,
     })
@@ -652,8 +635,6 @@ fn saved(settings: &Settings) -> SavedSettings {
             stop_bits: stop_name(settings.serial.stop_bits),
             flow: flow_name(settings.serial.flow),
             read_timeout_ms: settings.serial.read_timeout_ms,
-            reconnect: settings.serial.reconnect,
-            reopen_on_start: settings.serial.reopen_on_start,
         },
         newline: SavedNewline {
             receive: receive_name(settings.newline.receive),
@@ -668,15 +649,6 @@ fn saved(settings: &Settings) -> SavedSettings {
             scrollback: settings.terminal.scrollback,
             local_echo: settings.terminal.local_echo,
             palette: settings.terminal.palette.clone(),
-            font_family: settings.terminal.font_family.clone(),
-            font_size_px: settings.terminal.font_size_px,
-            font_fallbacks: settings.terminal.font_fallbacks.clone(),
-        },
-        ui: SavedUi {
-            theme_mode: settings.ui.theme_mode.clone(),
-            font_family: settings.ui.font_family.clone(),
-            font_size_px: settings.ui.font_size_px,
-            ligatures: settings.ui.ligatures,
         },
         log: SavedLog {
             directory: settings.log.directory.clone(),
@@ -821,8 +793,6 @@ parity = "none"
 stop_bits = "one"
 flow = "none"
 read_timeout_ms = 20
-reconnect = false
-reopen_on_start = false
 
 [newline]
 receive = "auto"
@@ -837,15 +807,6 @@ rows = 24
 scrollback = 10000
 local_echo = false
 palette = "classic-dark"
-font_family = ""
-font_size_px = 14.0
-font_fallbacks = ["Yu Gothic", "MS Gothic"]
-
-[ui]
-theme_mode = "dark"
-font_family = ""
-font_size_px = 16.0
-ligatures = false
 
 [log]
 directory = ""
@@ -890,7 +851,7 @@ text_encoding = "utf-8"
 
     #[test]
     fn unknown_key_rejects_the_file() {
-        let text = SAMPLE.replace("ligatures = false", "ligatures = false\nextra = 1");
+        let text = SAMPLE.replace("local_echo = false", "local_echo = false\nextra = 1");
         assert!(load_settings_str(&text).is_err());
     }
 
@@ -924,14 +885,134 @@ text_encoding = "utf-8"
     }
 
     #[test]
-    fn unknown_theme_falls_back_without_rejecting() {
-        let text = SAMPLE.replace("theme_mode = \"dark\"", "theme_mode = \"blue\"");
-        let loaded = load_settings_str(&text).unwrap();
-        assert_eq!(loaded.ui.theme_mode, "dark");
-        assert!(!loaded.warnings.is_empty());
+    fn unknown_palette_falls_back_without_rejecting() {
         let text = SAMPLE.replace("palette = \"classic-dark\"", "palette = \"nope\"");
         let loaded = load_settings_str(&text).unwrap();
         assert_eq!(loaded.terminal.palette, "classic-dark");
+        assert_eq!(loaded.warnings.len(), 1);
+    }
+
+    #[test]
+    fn empty_file_is_all_defaults_without_warnings() {
+        let loaded = load_settings_str("").unwrap();
+        assert_eq!(loaded, Settings::default());
+        let loaded = load_settings_str(
+            "schema = 1
+",
+        )
+        .unwrap();
+        assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
+    fn partial_file_keeps_given_values_and_defaults_the_rest() {
+        let text = "[serial]
+baud_rate = 9600
+parity = \"even\"
+
+[terminal]
+scrollback = 500
+
+[encoding]
+session = \"utf-8\"
+";
+        let loaded = load_settings_str(text).unwrap();
+        let defaults = Settings::default();
+        assert_eq!(loaded.serial.baud_rate, 9600);
+        assert_eq!(loaded.serial.parity, crate::Parity::Even);
+        assert_eq!(loaded.serial.data_bits, defaults.serial.data_bits);
+        assert_eq!(loaded.terminal.scrollback, 500);
+        assert_eq!(loaded.terminal.columns, defaults.terminal.columns);
+        assert_eq!(loaded.encoding, SessionEncoding::Utf8);
+        assert_eq!(loaded.newline, defaults.newline);
+        assert_eq!(loaded.log, defaults.log);
+        assert!(loaded.warnings.is_empty());
+    }
+
+    #[test]
+    fn omitted_keys_do_not_skip_validation_of_given_ones() {
+        assert!(load_settings_str(
+            "[serial]
+baud_rate = 0
+"
+        )
+        .is_err());
+        assert!(load_settings_str(
+            "[serial]
+parity = \"mark\"
+"
+        )
+        .is_err());
+        assert!(load_settings_str(
+            "schema = 2
+"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn legacy_gui_keys_load_with_one_warning() {
+        let text = format!(
+            "{}
+[ui]
+theme_mode = \"blue\"
+anything = 1
+",
+            SAMPLE
+                .replace(
+                    "read_timeout_ms = 20",
+                    "read_timeout_ms = 20
+reconnect = true
+reopen_on_start = false"
+                )
+                .replace(
+                    "local_echo = false",
+                    "local_echo = false
+font_family = \"x\"
+font_size_px = 99.0
+font_fallbacks = [\"a\"]"
+                )
+        );
+        let loaded = load_settings_str(&text).unwrap();
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        let warning = &loaded.warnings[0];
+        assert!(warning.starts_with("使わない設定を無視した: "), "{warning}");
+        for key in [
+            "serial.reconnect",
+            "serial.reopen_on_start",
+            "terminal.font_family",
+            "terminal.font_size_px",
+            "terminal.font_fallbacks",
+            "ui",
+        ] {
+            assert!(warning.contains(key), "{warning}");
+        }
+        let expected = Settings {
+            warnings: loaded.warnings.clone(),
+            ..Settings::default()
+        };
+        assert_eq!(loaded, expected);
+    }
+
+    #[test]
+    fn unknown_keys_still_reject_even_beside_legacy_ones() {
+        assert!(load_settings_str(
+            "[serial]
+reconnect = true
+bogus = 1
+"
+        )
+        .is_err());
+        assert!(load_settings_str(
+            "bogus = 1
+"
+        )
+        .is_err());
+        assert!(load_settings_str(
+            "[bogus]
+"
+        )
+        .is_err());
     }
 
     #[test]
