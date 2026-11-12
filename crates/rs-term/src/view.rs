@@ -37,7 +37,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
     frame.render_widget(TerminalPane { app }, chunks[0]);
-    frame.render_widget(Paragraph::new(status_line(&app.status_view())), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(status_line(&app.status_view(), chunks[1].width)),
+        chunks[1],
+    );
     if app.show_help() {
         draw_help(frame, app.help_scroll());
     } else if let Some(body) = app.modal_body() {
