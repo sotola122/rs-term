@@ -111,6 +111,7 @@ Notes:
 
 - Ctrl+C does not quit. It is sent to the port as `0x03`. Quit with the prefix, then `q`.
 - Scrolling: mouse wheel (3 lines per step) or PgUp / PgDn (a page). This moves rs-term's own scrollback.
+  Pressing Enter while scrolled back jumps to the latest output (and sends the newline as usual); other keys and new output do not move the view.
 - Selection: drag with the mouse. The selection is copied with OSC 52, and also to the OS clipboard when it can be opened.
 - Paste: a bracketed paste from the host terminal is sent to the port as text; prefix then `p` pastes the OS clipboard.
 - A log cannot be started while one is running; stop it first with `L`.

@@ -511,6 +511,8 @@ impl Session {
                 self.queue_bytes(bytes)
             }
             Input::Key(KeyInput::Enter) => {
+                // Enter jumps back to the latest output; other keys do not.
+                self.screen.scroll_bottom();
                 let bytes = codec::transmit_newline(self.newline.transmit).to_vec();
                 self.queue_bytes(bytes)?;
                 if self.local_echo {
@@ -1309,6 +1311,37 @@ mod tests {
             assert_eq!(*byte, expect, "mismatch at {index}");
             expect = expect.wrapping_add(1);
         }
+    }
+
+    #[test]
+    fn enter_snaps_a_scrolled_back_view_to_the_bottom_but_letters_do_not() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = Session::new(SessionConfig {
+            screen: ScreenConfig {
+                columns: 20,
+                rows: 4,
+                scrollback: 100,
+            },
+            newline: Newline {
+                receive: ReceiveNewline::Cr,
+                transmit: TransmitNewline::Cr,
+            },
+            ..SessionConfig::default()
+        });
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        for index in 0..12 {
+            session.apply_rx(format!("L{index:02}\r\n").as_bytes());
+        }
+        session.scroll_lines(5);
+        let offset = session.screen_content().display_offset;
+        assert!(offset > 0);
+        session
+            .apply_input(Input::Key(KeyInput::Char('a')))
+            .unwrap();
+        assert_eq!(session.screen_content().display_offset, offset);
+        session.apply_input(Input::Key(KeyInput::Enter)).unwrap();
+        assert_eq!(session.screen_content().display_offset, 0);
+        assert_eq!(wait_written(&state, 2), b"a\r");
     }
 
     #[test]
