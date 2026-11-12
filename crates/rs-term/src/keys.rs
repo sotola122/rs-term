@@ -46,7 +46,7 @@ pub enum Action {
     LiteralPrefix,
     Run(Command),
     Input(Input),
-    /// `page` is Shift+PgUp / Shift+PgDn. Otherwise the caller uses a few lines.
+    /// `page` is PgUp / PgDn, with or without Shift. Otherwise the caller uses a few lines.
     Scroll {
         up: bool,
         page: bool,
@@ -69,9 +69,7 @@ pub fn classify(key: &KeyEvent, prefix: Prefix, focus: Focus) -> Action {
             if is_prefix(key, prefix) {
                 return Action::ArmPrefix;
             }
-            if key.modifiers.contains(KeyModifiers::SHIFT)
-                && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
-            {
+            if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
                 return Action::Scroll {
                     up: key.code == KeyCode::PageUp,
                     page: true,
@@ -274,6 +272,28 @@ mod tests {
                 Focus::Prefix
             ),
             Action::Ignore
+        );
+        assert_eq!(
+            classify(
+                &key(KeyCode::PageUp, KeyModifiers::empty()),
+                prefix,
+                Focus::Terminal
+            ),
+            Action::Scroll {
+                up: true,
+                page: true
+            }
+        );
+        assert_eq!(
+            classify(
+                &key(KeyCode::PageDown, KeyModifiers::empty()),
+                prefix,
+                Focus::Terminal
+            ),
+            Action::Scroll {
+                up: false,
+                page: true
+            }
         );
         assert_eq!(
             classify(
