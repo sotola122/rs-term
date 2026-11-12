@@ -21,7 +21,7 @@
 
 ### D-261110-6（2026-11-10、v6）
 
-Iori の拘束要件（変えてはならない）は次のとおりである。
+拘束要件（変えてはならない）は次のとおりである。
 
 - ペインの動作とペインのキーは herdr に正確に従う。herdr が TUI のプレフィックスを使うところは、もっとも忠実な GUI の等価物を選び、herdr の `ファイル:行` で理由を書く。別の方式を発明しない。
 - タブバー、メニュー、設定画面を出さない。すべての操作はコマンドパレット（`gpui_component::command`、`Ctrl+Shift+P`）から行う。状態行は各ペインの下端に 1 行。ウィンドウは 1 つで、ペインは再帰的に分割する。エラーは全部その状態行に日本語で出す。著作権者は sotola122。
@@ -37,15 +37,15 @@ D-261109-8（Windows 優先、`gpui-kit` 0.9.0）、D-261109-9（gpt-6.1-sol レ
 
 | 項目 | 決定 | 出所 |
 | --- | --- | --- |
-| 著作権 | `Copyright 2026 sotola122`。アプリは Apache-2.0。`serialport` の MPL-2.0 はそのまま依存 | Iori（v4） |
-| 最初の OS | Windows 10 21H2 x64 / Windows 11 x64。macOS と Linux は二次 | Iori（v3） |
-| UI 依存 | `gpui-kit = "=0.9.0"`（`gpui-pre` `=0.3.11`）。`gpui-fast` は付けない | Iori（v3） |
+| 著作権 | `Copyright 2026 sotola122`。アプリは Apache-2.0。`serialport` の MPL-2.0 はそのまま依存 | 要件（v4） |
+| 最初の OS | Windows 10 21H2 x64 / Windows 11 x64。macOS と Linux は二次 | 要件（v3） |
+| UI 依存 | `gpui-kit = "=0.9.0"`（`gpui-pre` `=0.3.11`）。`gpui-fast` は付けない | 要件（v3） |
 | ツールチェーン | `rust-toolchain.toml` の 1.95.0 を唯一の版とする。ワークスペースの `rust-version` も 1.95。CI はこのファイルを読む | v6（R34、`afec483` の事実） |
-| ウィンドウ | 1 つ。追加の接続はペイン | Iori（v4） |
-| 操作の入口 | パレットだけ。タブ、メニュー、設定画面、ダイアログは出さない | Iori（v5） |
-| ペイン | herdr の既定キーと動作（§3） | Iori（v6） |
-| 状態行 | 各ペイン下端に 1 行。全エラーを日本語で | Iori（v6） |
-| 曖昧幅 | 1 セル。`width_cjk` は使わない | Iori（v4） |
+| ウィンドウ | 1 つ。追加の接続はペイン | 要件（v4） |
+| 操作の入口 | パレットだけ。タブ、メニュー、設定画面、ダイアログは出さない | 要件（v5） |
+| ペイン | herdr の既定キーと動作（§3） | 要件（v6） |
+| 状態行 | 各ペイン下端に 1 行。全エラーを日本語で | 要件（v6） |
+| 曖昧幅 | 1 セル。`width_cjk` は使わない | 要件（v4） |
 | ISO-2022-JP | v1 に入れない | 設計（v4） |
 | DTR | 既定オフ（`dtr_on_open = None`）。オンは `Some(true)` | 設計（v4） |
 | ブレーク保持 | 250 ms | 設計（v4） |
@@ -94,7 +94,7 @@ GPUI の複数打鍵バインド（`"ctrl-b v"`）は使わない。GPUI の保�
 | `clear_pane` | 未設定（1160） | `pane.clear` | 画面を消去 | 無し（パレットのみ） | `client/shell/actions.rs:1102-1104` |
 | `copy_mode` | `prefix+[`（1161） | `pane.copy_mode` | コピーモード | `prefix+[` | `keyboard.mdx:93-95` |
 | `edit_scrollback` | `prefix+e`（1159） | 採用しない | — | — | §3.5 |
-| タブ、ワークスペース、サイドバー、デタッチ（`new_tab`、`next_tab`、`workspace_picker`、`detach` ほか） | 各 `prefix+…` | 採用しない | — | 束縛しない | タブとメニューは Iori が禁止。プレフィックスの後に押しても「未束縛」として捨てる |
+| タブ、ワークスペース、サイドバー、デタッチ（`new_tab`、`next_tab`、`workspace_picker`、`detach` ほか） | 各 `prefix+…` | 採用しない | — | 束縛しない | タブとメニューは要件で禁止。プレフィックスの後に押しても「未束縛」として捨てる |
 
 キー表記の注意。herdr の `prefix+shift+h` は rs-term の表示では `Ctrl+B, Shift+H` である。`prefix+minus` は US 配列でも JIS 配列でも `-` キーで、テンキーの `-` も同じに扱う。`prefix+?` は Shift を伴う配列（US の `Shift+/`、JIS の `Shift+・`）をどちらも「`?` という文字」で照合する。照合は打鍵の文字（`key_char`）で行い、物理キーでは行わない。
 
@@ -128,14 +128,14 @@ GPUI の複数打鍵バインド（`"ctrl-b v"`）は使わない。GPUI の保�
 
 ### 3.4 パレットのキー
 
-`Ctrl+Shift+P` は Iori の指定である。herdr は全バインドの一覧（`prefix+?`、`model.rs:1124`）と設定画面（`prefix+s`、`model.rs:1125`）を持つ。rs-term ではその 2 つの役割をパレットが持つ。パレットは全コマンドとキーを出し、部分一致で絞り込め、設定の変更もここで行う。したがって `prefix+?` と `prefix+s` もパレットを開く。
+`Ctrl+Shift+P` は要件の指定である。herdr は全バインドの一覧（`prefix+?`、`model.rs:1124`）と設定画面（`prefix+s`、`model.rs:1125`）を持つ。rs-term ではその 2 つの役割をパレットが持つ。パレットは全コマンドとキーを出し、部分一致で絞り込め、設定の変更もここで行う。したがって `prefix+?` と `prefix+s` もパレットを開く。
 
 ### 3.5 採用しないもの
 
 | herdr | 理由 |
 | --- | --- |
 | `edit_scrollback`（`prefix+e`、`$EDITOR` で開く） | Windows の GUI アプリに `$EDITOR` の慣習が無い。スクロールバックの保存はログ機能が受け持つ。§14 の未決 Q3 |
-| 右クリックメニュー（`keyboard.mdx:10`） | メニューは Iori が禁止。右クリックは何もしない |
+| 右クリックメニュー（`keyboard.mdx:10`） | メニューは要件で禁止。右クリックは何もしない |
 | タブ、ワークスペース、サイドバー、デタッチ、通知、エージェント | 単一ウィンドウでタブ無しの要件の外 |
 | 既定の直接コード（`ctrl+alt+…`） | herdr の既定は全部プレフィックス付きで、直接コードは利用者が足す例（`keyboard.mdx:114-128`）である。既定に入れない。§3.6 |
 
@@ -162,7 +162,7 @@ herdr はコピー、貼り付けを外側の端末に任せる。rs-term はそ
 
 | キー | アクション | 理由 |
 | --- | --- | --- |
-| `Ctrl+Shift+P` | `palette.toggle` | Iori |
+| `Ctrl+Shift+P` | `palette.toggle` | 要件 |
 | `Ctrl+Shift+K` | `session.connect` | v5 から継続。コアの `SessionError::NotOpen` の文言が参照している |
 | `Ctrl+Shift+D` | `session.disconnect` | v5 から継続 |
 | `Ctrl+Shift+B` | `session.break` | v5 から継続 |
@@ -793,14 +793,14 @@ UI の自動テストは、GPUI を使わない純粋関数（`layout`、`keymap
 
 | # | v5 | v6 | 理由 |
 | --- | --- | --- | --- |
-| 1 | 分割キー `ctrl-shift-h/j`、閉じる `ctrl-shift-w`、次ペイン `ctrl-shift-right` | herdr 既定のプレフィックス方式（§3.2） | Iori の拘束要件。R05、R06 |
+| 1 | 分割キー `ctrl-shift-h/j`、閉じる `ctrl-shift-w`、次ペイン `ctrl-shift-right` | herdr 既定のプレフィックス方式（§3.2） | 拘束要件。R05、R06 |
 | 2 | 「横に分割＝`h_resizable`」「縦に分割＝`v_resizable`」 | `pane.split_vertical`＝右に分割、`pane.split_horizontal`＝下に分割。表示名は方向で書く | 横／縦は読み手で逆になる（監査「Names that do not match」）。herdr の文書も「Split right / down」（`keyboard.mdx:25`） |
 | 3 | 次ペインだけ | 方向フォーカス、入れ替え、巡回（前後）、直前、ズーム、サイズ変更モード、名前、消去、コピーモード | herdr のペイン操作の全部（§3.2）。採らないものは §3.5 |
 | 4 | 比率 50〜950（千分率） | 0.1〜0.9、刻み 0.05 | herdr `layout.rs:628-634`、`app/api/panes.rs:737`。R14 |
 | 5 | 最後のペインを閉じると「未接続に戻す」 | 新しい未接続ペインに置き換え。接続中・ログ中なら確認 | herdr の close はペインを捨てる。最後の 1 枚の確認は herdr の `confirm_close`（§3.3） |
 | 6 | 分割の幾何は `gpui-component` の `h_resizable`/`v_resizable` と `ResizableState` | 自前の木（herdr `TileLayout` の移植）で矩形を計算し、絶対配置で描く。仕切りも自前 | 方向フォーカス、入れ替え、サイズ変更モード、ズームは矩形と比率の木が要る。`ResizableState` は px の配列しか持たず、herdr の意味論（比率の範囲、反対側の辺）を表せない。復元の 1 回問題（R49）も消える |
 | 7 | 新ペインの扱い未記載（実装は複製） | 設定の既定値の未接続ペイン | R12、herdr の新ペインは新しいプロセス |
-| 8 | 状態行の欄は「ポート、速度とフレーム、Link、ログ、最後のエラー」 | §5 の 9 欄、メッセージの重さと寿命、履歴 | Iori のモック s1〜s4 と「全エラーを状態行に」。R02、R03 |
+| 8 | 状態行の欄は「ポート、速度とフレーム、Link、ログ、最後のエラー」 | §5 の 9 欄、メッセージの重さと寿命、履歴 | 要件のモック s1〜s4 と「全エラーを状態行に」。R02、R03 |
 | 9 | パレットの各ページの詳細なし | ページのモデル、フォーカス、Escape の段階、行の値で確定（§6） | R04、R09、R10、R11、N1 |
 | 10 | 接続はポート、ボーレート、データ、パリティ、ストップ、フロー、DTR の 7 ページ | ポート、ボーレート、フレーム、フロー、DTR の 5 ページ | モック s3 のヒント文。R07 の 3 ページ連鎖の不具合が構造的に無くなる |
 | 11 | ツールチェーン 1.88.0 | 1.95.0、1 か所 | 固定の `gpui-kit` が 1.95 を要する（`afec483`）。R34、N23 |
@@ -814,7 +814,7 @@ UI の自動テストは、GPUI を使わない純粋関数（`layout`、`keymap
 | 19 | 本番 UI の受入は Windows の手動のみ | 純粋モデルのテスト名を先に決め、手動手順をファイルに残す | 監査「A green test run is not acceptance」と、次の監査で照合できるように |
 | 20 | `tests/fixtures/` のゴールデン | `screen.rs` 内のテストで代える | R38。短い入力はテストの中が読みやすい |
 
-## 14. 未決（Iori に確認したいこと）
+## 14. 未決（確認したいこと）
 
 決めるまでは「既定」の列で実装する。違う指示があれば実装前にこの文書を直す。
 
