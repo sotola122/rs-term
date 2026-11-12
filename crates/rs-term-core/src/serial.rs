@@ -59,6 +59,53 @@ pub enum Flow {
     RtsCts,
 }
 
+// The spellings below are the one list the command line and `settings.toml`
+// share. Case does not matter.
+
+impl DataBits {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "5" | "five" => Some(Self::Five),
+            "6" | "six" => Some(Self::Six),
+            "7" | "seven" => Some(Self::Seven),
+            "8" | "eight" => Some(Self::Eight),
+            _ => None,
+        }
+    }
+}
+
+impl Parity {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "n" | "none" => Some(Self::None),
+            "o" | "odd" => Some(Self::Odd),
+            "e" | "even" => Some(Self::Even),
+            _ => None,
+        }
+    }
+}
+
+impl StopBits {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "1" | "one" => Some(Self::One),
+            "2" | "two" => Some(Self::Two),
+            _ => None,
+        }
+    }
+}
+
+impl Flow {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "xonxoff" | "xon/xoff" => Some(Self::XonXoff),
+            "rtscts" | "rts/cts" => Some(Self::RtsCts),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialParams {
     pub path: String,
@@ -67,8 +114,6 @@ pub struct SerialParams {
     pub parity: Parity,
     pub stop_bits: StopBits,
     pub flow: Flow,
-    pub dtr_on_open: Option<bool>,
-    pub rts: bool,
     pub read_timeout: Duration,
 }
 
@@ -81,8 +126,6 @@ impl Default for SerialParams {
             parity: Parity::None,
             stop_bits: StopBits::One,
             flow: Flow::None,
-            dtr_on_open: None,
-            rts: false,
             read_timeout: READ_TIMEOUT,
         }
     }
@@ -110,26 +153,6 @@ pub struct UsbIdentity {
     pub serial_number: Option<String>,
     pub manufacturer: Option<String>,
     pub product: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PinState {
-    pub cts: bool,
-    pub dsr: bool,
-    pub cd: bool,
-    pub ri: bool,
-}
-
-/// Previous USB identity matches the current enumeration only when vid, pid,
-/// and serial were all present on both sides. A missing serial never matches
-/// on the path alone.
-pub fn usb_identity_matches(previous: &UsbIdentity, current: &UsbIdentity) -> bool {
-    match (&previous.serial_number, &current.serial_number) {
-        (Some(before), Some(now)) => {
-            previous.vid == current.vid && previous.pid == current.pid && before == now
-        }
-        _ => false,
-    }
 }
 
 pub fn list_ports() -> Result<Vec<PortInfo>, PortError> {
@@ -183,10 +206,7 @@ pub(crate) trait PortIo: Send {
         Ok(())
     }
     fn apply(&mut self, params: &SerialParams) -> Result<(), PortError>;
-    fn set_dtr(&mut self, on: bool) -> Result<(), PortError>;
-    fn set_rts(&mut self, on: bool) -> Result<(), PortError>;
     fn set_break(&mut self, on: bool) -> Result<(), PortError>;
-    fn pins(&mut self) -> Result<PinState, PortError>;
 }
 
 pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortError> {
@@ -195,31 +215,20 @@ pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortEr
             message: "ボーレートが範囲外（1〜4000000）".into(),
         });
     }
-    let mut builder = serialport::new(&params.path, params.baud_rate)
+    let builder = serialport::new(&params.path, params.baud_rate)
         .data_bits(map_data_bits(params.data_bits))
         .parity(map_parity(params.parity))
         .stop_bits(map_stop(params.stop_bits))
         .flow_control(map_flow(params.flow))
         .timeout(params.read_timeout);
-    if let Some(dtr) = params.dtr_on_open {
-        builder = builder.dtr_on_open(dtr);
-    }
     let port = builder
         .open()
         .map_err(|error| map_open_error(&params.path, error))?;
-    let mut io = SerialIo {
-        port,
-        flow: params.flow,
-    };
-    if params.flow == Flow::None && params.rts {
-        io.set_rts(true)?;
-    }
-    Ok(Box::new(io))
+    Ok(Box::new(SerialIo { port }))
 }
 
 struct SerialIo {
     port: Box<dyn serialport::SerialPort>,
-    flow: Flow,
 }
 
 impl PortIo for SerialIo {
@@ -247,25 +256,7 @@ impl PortIo for SerialIo {
         self.port
             .set_flow_control(map_flow(params.flow))
             .map_err(|error| named("フロー制御", error))?;
-        self.flow = params.flow;
         Ok(())
-    }
-
-    fn set_dtr(&mut self, on: bool) -> Result<(), PortError> {
-        self.port
-            .write_data_terminal_ready(on)
-            .map_err(map_serial_error)
-    }
-
-    fn set_rts(&mut self, on: bool) -> Result<(), PortError> {
-        if self.flow != Flow::None {
-            return Err(PortError::Unsupported(
-                "RTS を手で動かせるのはフロー制御がなしのときだけ",
-            ));
-        }
-        self.port
-            .write_request_to_send(on)
-            .map_err(map_serial_error)
     }
 
     fn set_break(&mut self, on: bool) -> Result<(), PortError> {
@@ -274,15 +265,6 @@ impl PortIo for SerialIo {
         } else {
             self.port.clear_break().map_err(map_serial_error)
         }
-    }
-
-    fn pins(&mut self) -> Result<PinState, PortError> {
-        Ok(PinState {
-            cts: self.port.read_clear_to_send().map_err(map_serial_error)?,
-            dsr: self.port.read_data_set_ready().map_err(map_serial_error)?,
-            cd: self.port.read_carrier_detect().map_err(map_serial_error)?,
-            ri: self.port.read_ring_indicator().map_err(map_serial_error)?,
-        })
     }
 }
 
@@ -428,8 +410,6 @@ pub(crate) enum Command {
         bytes: Vec<u8>,
     },
     Apply(SerialParams),
-    Dtr(bool),
-    Rts(bool),
     Break {
         hold: Duration,
     },
@@ -610,18 +590,6 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
             }
             Step::Continue
         }
-        Command::Dtr(on) => {
-            if let Err(error) = ctx.port.set_dtr(on) {
-                out.status(IoEvent::CommandFailed(error));
-            }
-            Step::Continue
-        }
-        Command::Rts(on) => {
-            if let Err(error) = ctx.port.set_rts(on) {
-                out.status(IoEvent::CommandFailed(error));
-            }
-            Step::Continue
-        }
         Command::Break { hold } => {
             if let Err(error) = ctx.port.set_break(true) {
                 out.status(IoEvent::CommandFailed(error));
@@ -686,7 +654,6 @@ fn worker_loop(
     let mut pending: Vec<u8> = Vec::new();
     let mut pending_at = 0usize;
     let mut break_until: Option<Instant> = None;
-    let mut last_pins: Option<PinState> = None;
     loop {
         let mut read_was_idle = false;
         let read = port.read(&mut buffer);
@@ -757,13 +724,6 @@ fn worker_loop(
         };
         pump_tx(&mut ctx, &mut out);
 
-        if let Ok(pins) = port.pins() {
-            if last_pins != Some(pins) {
-                last_pins = Some(pins);
-                out.status(IoEvent::Pins(pins));
-            }
-        }
-
         if read_was_idle && !saw_command && pending_at >= pending.len() {
             // A real port already blocked inside `read` for `read_timeout`.
             // This yield only matters for a mock that returns TimedOut
@@ -805,17 +765,8 @@ mod tests {
         fn apply(&mut self, _: &SerialParams) -> Result<(), PortError> {
             Ok(())
         }
-        fn set_dtr(&mut self, _: bool) -> Result<(), PortError> {
-            Ok(())
-        }
-        fn set_rts(&mut self, _: bool) -> Result<(), PortError> {
-            Ok(())
-        }
         fn set_break(&mut self, _: bool) -> Result<(), PortError> {
             Ok(())
-        }
-        fn pins(&mut self) -> Result<PinState, PortError> {
-            Err(PortError::Closed)
         }
     }
 
@@ -836,23 +787,18 @@ mod tests {
     }
 
     #[test]
-    fn identity_requires_vid_pid_and_serial() {
-        let full = UsbIdentity {
-            vid: 0x0403,
-            pid: 0x6001,
-            serial_number: Some("ABC".into()),
-            manufacturer: None,
-            product: None,
-        };
-        let same = full.clone();
-        assert!(usb_identity_matches(&full, &same));
-        let mut missing = full.clone();
-        missing.serial_number = None;
-        assert!(!usb_identity_matches(&full, &missing));
-        assert!(!usb_identity_matches(&missing, &full));
-        let mut other = full.clone();
-        other.serial_number = Some("XYZ".into());
-        assert!(!usb_identity_matches(&full, &other));
+    fn frame_spellings_are_shared_and_case_insensitive() {
+        assert_eq!(DataBits::parse("8"), Some(DataBits::Eight));
+        assert_eq!(DataBits::parse("Five"), Some(DataBits::Five));
+        assert_eq!(DataBits::parse("9"), None);
+        assert_eq!(Parity::parse("E"), Some(Parity::Even));
+        assert_eq!(Parity::parse("none"), Some(Parity::None));
+        assert_eq!(Parity::parse("mark"), None);
+        assert_eq!(StopBits::parse("2"), Some(StopBits::Two));
+        assert_eq!(StopBits::parse("three"), None);
+        assert_eq!(Flow::parse("RTS/CTS"), Some(Flow::RtsCts));
+        assert_eq!(Flow::parse("xonxoff"), Some(Flow::XonXoff));
+        assert_eq!(Flow::parse("dtr"), None);
     }
 
     #[test]

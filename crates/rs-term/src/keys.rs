@@ -180,7 +180,7 @@ pub fn is_prefix(key: &KeyEvent, prefix: Prefix) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rs_term_core::{key_to_bytes, SessionEncoding, TransmitNewline};
+    use rs_term_core::encode_key;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
@@ -190,7 +190,7 @@ mod tests {
         let Input::Key(key) = input else {
             panic!("expected a key");
         };
-        key_to_bytes(key, SessionEncoding::ShiftJis, TransmitNewline::Cr, false).unwrap()
+        encode_key(key, false).unwrap()
     }
 
     #[test]
@@ -234,7 +234,8 @@ mod tests {
         let Action::Input(input) = kana else {
             panic!("kana: {kana:?}");
         };
-        assert_eq!(bytes(&input), vec![0x82, 0xA0]);
+        // Encoding a character is the session's job (core tests cover it).
+        assert_eq!(input, Input::Key(KeyInput::Char('あ')));
     }
 
     #[test]
@@ -249,14 +250,7 @@ mod tests {
             classify(&ctrl_a, prefix, Focus::Prefix),
             Action::LiteralPrefix
         );
-        let literal = key_to_bytes(
-            &KeyInput::Ctrl('a'),
-            SessionEncoding::Utf8,
-            TransmitNewline::Cr,
-            false,
-        )
-        .unwrap();
-        assert_eq!(literal, vec![0x01]);
+        assert_eq!(encode_key(&KeyInput::Ctrl('a'), false).unwrap(), vec![0x01]);
 
         assert_eq!(
             classify(

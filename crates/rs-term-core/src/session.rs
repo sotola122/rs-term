@@ -11,11 +11,8 @@
 //! `close` (and `Drop`) wait, and only for `CLOSE_WAIT`, so the port is
 //! really released before the process exits.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::task::Poll;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -25,7 +22,7 @@ use crate::codec::{self, Newline, PastePiece, SessionEncoding};
 use crate::error::{LogError, OpenError, PortError, SessionError};
 use crate::log::{LogCommand, LogEngine, LogSession};
 use crate::screen::{Screen, ScreenSnapshot};
-use crate::serial::{self, Command, PinState, PortIo, SerialParams, UsbIdentity, WorkerHandle};
+use crate::serial::{self, Command, PortIo, SerialParams, WorkerHandle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
@@ -110,8 +107,6 @@ pub enum Link {
 pub struct EventRx {
     data: Receiver<IoEvent>,
     status: UnboundedReceiver<IoEvent>,
-    status_closed: bool,
-    data_closed: bool,
 }
 
 impl EventRx {
@@ -119,34 +114,7 @@ impl EventRx {
         Self {
             data: channels.data,
             status: channels.status,
-            status_closed: false,
-            data_closed: false,
         }
-    }
-
-    pub async fn recv(&mut self) -> Option<IoEvent> {
-        std::future::poll_fn(|cx| {
-            if !self.status_closed {
-                match Pin::new(&mut self.status.recv()).poll(cx) {
-                    Poll::Ready(Ok(event)) => return Poll::Ready(Some(event)),
-                    Poll::Ready(Err(_)) => self.status_closed = true,
-                    Poll::Pending => {}
-                }
-            }
-            if !self.data_closed {
-                match Pin::new(&mut self.data.recv()).poll(cx) {
-                    Poll::Ready(Ok(event)) => return Poll::Ready(Some(event)),
-                    Poll::Ready(Err(_)) => self.data_closed = true,
-                    Poll::Pending => {}
-                }
-            }
-            if self.status_closed && self.data_closed {
-                Poll::Ready(None)
-            } else {
-                Poll::Pending
-            }
-        })
-        .await
     }
 
     /// The next event without waiting. `None` means nothing is queued now.
@@ -157,19 +125,11 @@ impl EventRx {
         self.data.try_recv().ok()
     }
 
-    /// Both channels are closed and empty.
-    pub fn is_closed(&mut self) -> bool {
-        if !self.status_closed {
-            if let Err(error) = self.status.try_recv().map(|_| ()) {
-                self.status_closed = error.is_closed();
-            }
-        }
-        if !self.data_closed {
-            if let Err(error) = self.data.try_recv().map(|_| ()) {
-                self.data_closed = error.is_closed();
-            }
-        }
-        self.status_closed && self.data_closed
+    /// Both channels are closed and empty. A queued event is consumed.
+    #[cfg(test)]
+    fn is_closed(&mut self) -> bool {
+        matches!(self.status.try_recv(), Err(error) if error.is_closed())
+            && matches!(self.data.try_recv(), Err(error) if error.is_closed())
     }
 }
 
@@ -181,7 +141,6 @@ pub enum IoEvent {
     /// The port refused a parameter change. The session reverts its
     /// parameters to the values that were in effect before.
     ApplyFailed(PortError),
-    Pins(PinState),
     Dropped {
         bytes: u64,
     },
@@ -302,9 +261,6 @@ pub struct Session {
     generation: Arc<AtomicU64>,
     log: LogEngine,
     note: Option<Message>,
-    pins: Option<PinState>,
-    usb: Option<UsbIdentity>,
-    reconnect: bool,
     rx_bytes: u64,
     /// Bytes the port threads of every connection have written. Shared with
     /// the workers, so a disconnect or a cancel needs no bookkeeping.
@@ -334,9 +290,6 @@ impl Session {
             generation: Arc::new(AtomicU64::new(1)),
             log: LogEngine::default(),
             note: None,
-            pins: None,
-            usb: None,
-            reconnect: false,
             rx_bytes: 0,
             tx_bytes: Arc::new(AtomicU64::new(0)),
         }
@@ -348,13 +301,6 @@ impl Session {
 
     pub fn tx_bytes(&self) -> u64 {
         self.tx_bytes.load(Ordering::Relaxed)
-    }
-
-    /// Open on the calling thread. The UI uses `begin_connect` instead.
-    pub fn connect(&mut self, serial: SerialParams) -> Result<EventRx, OpenError> {
-        let pending = self.begin_connect(serial)?;
-        let opened = pending.open();
-        self.finish_connect(opened)
     }
 
     /// Move to `Opening` and return the blocking part.
@@ -426,7 +372,6 @@ impl Session {
                 self.params = effective.clone();
                 self.applied = Some(opened.params);
                 self.link = Link::Open { params: effective };
-                self.pins = None;
                 self.note = None;
                 Ok(EventRx::new(channels))
             }
@@ -463,17 +408,6 @@ impl Session {
         self.stop_worker();
         self.reset_stream();
         self.link = Link::Disconnected;
-        self.pins = None;
-    }
-
-    /// Reset to the state of a new session: disconnected, no port name, log
-    /// stopped. The screen stays (§5.3: the user clears it).
-    pub fn reset_to_unconnected(&mut self) {
-        self.disconnect();
-        let _ = self.log.command(LogCommand::Stop);
-        self.params.path.clear();
-        self.usb = None;
-        self.note = None;
     }
 
     /// Disconnect and wait (up to `CLOSE_WAIT`) until the port thread has
@@ -524,10 +458,6 @@ impl Session {
         self.note = Some(message);
     }
 
-    pub fn set_note(&mut self, note: impl Into<String>) {
-        self.note = Some(Message::error(note));
-    }
-
     /// Periodic work, about once a second: flush a quiet log and reap port
     /// threads that were asked to stop.
     pub fn tick(&mut self) {
@@ -548,37 +478,6 @@ impl Session {
             }
         }
         self.reaping = still;
-    }
-
-    pub fn pins(&self) -> Option<PinState> {
-        self.pins
-    }
-
-    pub fn set_usb_identity(&mut self, identity: Option<UsbIdentity>) {
-        self.usb = identity;
-    }
-
-    pub fn usb_identity(&self) -> Option<&UsbIdentity> {
-        self.usb.as_ref()
-    }
-
-    pub fn set_reconnect_enabled(&mut self, enabled: bool) {
-        self.reconnect = enabled;
-    }
-
-    pub fn reconnect_enabled(&self) -> bool {
-        self.reconnect
-    }
-
-    /// Reconnect stays off unless the setting is on and vid, pid, and serial
-    /// all match. The UI does not expose the setting.
-    pub fn reconnect_matches(&self, current: Option<&UsbIdentity>) -> bool {
-        match (self.reconnect, self.usb.as_ref(), current) {
-            (true, Some(previous), Some(current)) => {
-                serial::usb_identity_matches(previous, current)
-            }
-            _ => false,
-        }
     }
 
     pub fn apply_rx(&mut self, bytes: &[u8]) {
@@ -672,13 +571,8 @@ impl Session {
             }
             IoEvent::CommandFailed(error) => self.note_command_failed(error),
             IoEvent::ApplyFailed(error) => self.note_apply_failed(error),
-            IoEvent::Pins(pins) => self.note_pins(pins),
             IoEvent::Dropped { bytes } => self.note_dropped(bytes),
         }
-    }
-
-    pub fn note_pins(&mut self, pins: PinState) {
-        self.pins = Some(pins);
     }
 
     pub fn note_dropped(&mut self, bytes: u64) {
@@ -744,27 +638,6 @@ impl Session {
             self.params = params;
             Ok(())
         }
-    }
-
-    pub fn set_dtr(&mut self, on: bool) -> Result<(), SessionError> {
-        self.params.dtr_on_open = if on { Some(true) } else { None };
-        if matches!(self.link, Link::Open { .. }) {
-            self.send_command(Command::Dtr(on))?;
-        }
-        Ok(())
-    }
-
-    pub fn set_rts(&mut self, on: bool) -> Result<(), SessionError> {
-        if self.params.flow != serial::Flow::None {
-            return Err(SessionError::Port(PortError::Unsupported(
-                "RTS を手で動かせるのはフロー制御がなしのときだけ",
-            )));
-        }
-        self.params.rts = on;
-        if matches!(self.link, Link::Open { .. }) {
-            self.send_command(Command::Rts(on))?;
-        }
-        Ok(())
     }
 
     pub fn log(&mut self, command: LogCommand) -> Result<(), LogError> {
@@ -942,30 +815,6 @@ pub fn encode_key(key: &KeyInput, app_cursor: bool) -> Result<Vec<u8>, SessionEr
     key_bytes(key, app_cursor)
 }
 
-/// Wire bytes for one key, including encoded characters and the transmit newline.
-pub fn key_to_bytes(
-    key: &KeyInput,
-    encoding: SessionEncoding,
-    newline: crate::codec::TransmitNewline,
-    app_cursor: bool,
-) -> Result<Vec<u8>, SessionError> {
-    match key {
-        KeyInput::Char(ch) => {
-            let text = ch.to_string();
-            codec::encode(encoding, &text).map_err(|ch| SessionError::Unmappable { ch })
-        }
-        KeyInput::Alt(ch) => {
-            let encoded = codec::encode(encoding, &ch.to_string())
-                .map_err(|ch| SessionError::Unmappable { ch })?;
-            let mut bytes = vec![0x1B];
-            bytes.extend(encoded);
-            Ok(bytes)
-        }
-        KeyInput::Enter => Ok(codec::transmit_newline(newline).to_vec()),
-        other => encode_key(other, app_cursor),
-    }
-}
-
 /// Visual row 0 is the top of the viewport. Alacritty line 0 is the top of
 /// the live screen; lines increase downward, and history is negative once
 /// `display_offset` moves the viewport up.
@@ -1049,7 +898,7 @@ mod tests {
     use super::*;
     use crate::codec::{ReceiveNewline, TransmitNewline};
     use crate::log::{LogEncoding, LogTarget, Rotate};
-    use crate::serial::{DataBits, Flow, Parity, StopBits};
+    use crate::serial::{DataBits, Parity, StopBits};
     use std::collections::VecDeque;
     use std::io;
     use std::sync::{Mutex, MutexGuard};
@@ -1074,14 +923,10 @@ mod tests {
         /// Total bytes the port still accepts; `None` is unlimited.
         write_budget: Option<usize>,
         applied: Vec<SerialParams>,
-        dtr: Vec<bool>,
-        rts: Vec<bool>,
         break_on: bool,
         break_count: u32,
         clear_count: u32,
         opened_with: Option<SerialParams>,
-        pins: PinState,
-        fail_rts: bool,
         fail_apply: bool,
         closed: bool,
         read_delay: Duration,
@@ -1136,20 +981,6 @@ mod tests {
             Ok(())
         }
 
-        fn set_dtr(&mut self, on: bool) -> Result<(), PortError> {
-            lock(&self.inner).dtr.push(on);
-            Ok(())
-        }
-
-        fn set_rts(&mut self, on: bool) -> Result<(), PortError> {
-            let mut state = lock(&self.inner);
-            if state.fail_rts {
-                return Err(PortError::Unsupported("rts"));
-            }
-            state.rts.push(on);
-            Ok(())
-        }
-
         fn set_break(&mut self, on: bool) -> Result<(), PortError> {
             let mut state = lock(&self.inner);
             state.break_on = on;
@@ -1159,10 +990,6 @@ mod tests {
                 state.clear_count += 1;
             }
             Ok(())
-        }
-
-        fn pins(&mut self) -> Result<PinState, PortError> {
-            Ok(lock(&self.inner).pins)
         }
     }
 
@@ -1301,33 +1128,9 @@ mod tests {
         assert_eq!(opened.parity, Parity::Even);
         assert_eq!(opened.stop_bits, StopBits::One);
         assert_eq!(opened.read_timeout, Duration::from_millis(20));
-        assert_eq!(opened.dtr_on_open, None);
         session.apply_input(Input::Bytes(vec![1, 2, 3])).unwrap();
         let written = wait_written(&state, 3);
         assert_eq!(written, vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn dtr_on_is_some_true_and_rtscts_rejects_manual_rts() {
-        let (state, open) = open_shared(empty_state());
-        let mut session = session();
-        let params = SerialParams {
-            dtr_on_open: Some(true),
-            flow: Flow::RtsCts,
-            rts: true,
-            ..SerialParams::default()
-        };
-        let _rx = session.connect_with(params, open).unwrap();
-        assert_eq!(
-            lock(&state).opened_with.as_ref().unwrap().dtr_on_open,
-            Some(true)
-        );
-        let error = session.set_rts(false).unwrap_err();
-        assert!(matches!(
-            error,
-            SessionError::Port(PortError::Unsupported(_))
-        ));
-        assert!(lock(&state).rts.is_empty());
     }
 
     #[test]
@@ -1496,7 +1299,6 @@ mod tests {
             match rx.try_recv() {
                 Some(IoEvent::Data(bytes)) => got.extend(bytes),
                 Some(IoEvent::Dropped { .. }) => panic!("receive path dropped bytes"),
-                Some(IoEvent::Pins(_)) => {}
                 Some(other) => panic!("unexpected {other:?}"),
                 None => thread::sleep(Duration::from_millis(1)),
             }
@@ -1723,26 +1525,6 @@ mod tests {
     }
 
     #[test]
-    fn manual_rts_only_without_flow_control() {
-        for flow in [Flow::XonXoff, Flow::RtsCts] {
-            let (state, open) = open_shared(empty_state());
-            let mut session = session();
-            let _rx = session
-                .connect_with(
-                    SerialParams {
-                        flow,
-                        ..SerialParams::default()
-                    },
-                    open,
-                )
-                .unwrap();
-            assert!(session.set_rts(true).is_err(), "{flow:?}");
-            thread::sleep(Duration::from_millis(20));
-            assert!(lock(&state).rts.is_empty());
-        }
-    }
-
-    #[test]
     fn disconnect_finishes_the_receive_stream() {
         let mut session = Session::new(SessionConfig {
             encoding: SessionEncoding::ShiftJis,
@@ -1806,9 +1588,8 @@ mod tests {
             }))
             .unwrap();
         session.apply_rx(b"foo\rbar\x1b[31mZ");
-        session.log(LogCommand::Pause).unwrap();
-        session.apply_rx(b"NO");
         session.log(LogCommand::Stop).unwrap();
+        session.apply_rx(b"NO");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("foo\rbar"), "{text}");
         assert!(!text.contains("NO"), "{text}");
@@ -1855,19 +1636,10 @@ mod tests {
             write_error: false,
             write_budget: None,
             applied: Vec::new(),
-            dtr: Vec::new(),
-            rts: Vec::new(),
             break_on: false,
             break_count: 0,
             clear_count: 0,
             opened_with: None,
-            pins: PinState {
-                cts: false,
-                dsr: false,
-                cd: false,
-                ri: false,
-            },
-            fail_rts: false,
             fail_apply: false,
             closed: false,
             read_delay: Duration::ZERO,
@@ -1904,7 +1676,7 @@ mod tests {
         while Instant::now() < deadline {
             match rx.try_recv() {
                 Some(event @ IoEvent::Data(_)) => return Some(event),
-                Some(IoEvent::Pins(_)) | Some(IoEvent::Dropped { .. }) => {}
+                Some(IoEvent::Dropped { .. }) => {}
                 Some(other) => return Some(other),
                 None if rx.is_closed() => return None,
                 None => thread::sleep(Duration::from_millis(5)),
@@ -1917,7 +1689,6 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             match rx.try_recv() {
-                Some(IoEvent::Pins(_)) => {}
                 Some(event) => return Some(event),
                 None if rx.is_closed() => return None,
                 None => thread::sleep(Duration::from_millis(5)),
@@ -2045,7 +1816,9 @@ mod tests {
         };
 
         let mut session = session();
-        let _rx = session.connect(params.clone()).expect("first open");
+        let _rx = session
+            .connect_with(params.clone(), serial::open_port)
+            .expect("first open");
         let second = serial::open_port(&params);
         assert!(second.is_err(), "a second open must be refused");
         drop(second);

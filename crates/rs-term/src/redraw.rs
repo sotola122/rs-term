@@ -35,6 +35,7 @@ impl RedrawGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status::LinkState;
 
     fn view() -> StatusView {
         StatusView {
@@ -42,7 +43,7 @@ mod tests {
             port: "COM3".into(),
             frame: "115200 8N1".into(),
             encoding: "UTF-8".into(),
-            link: "接続".into(),
+            link: LinkState::Open,
             log: "LOG off".into(),
             rx: 0,
             tx: 0,

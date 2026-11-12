@@ -13,14 +13,14 @@ use rs_term_core::{
     classic_dark, list_ports, load_settings_file, log_dir_from_env, palette_by_name,
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
-    OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionEncoding,
-    SessionError, Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
+    OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionError, Settings,
+    Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
 use crate::copy::{clipboard_text, copy_text};
 use crate::keys::{self, Action, Command, Focus, Prefix};
-use crate::status::StatusView;
+use crate::status::{LinkState, StatusView};
 
 const BREAK_HOLD: Duration = Duration::from_millis(250);
 const DRAIN_BUDGET: usize = 512 * 1024;
@@ -131,8 +131,9 @@ impl App {
         app
     }
 
+    /// Prefix `q` or a termination signal (SIGTERM / SIGHUP on Unix).
     pub fn should_quit(&self) -> bool {
-        self.quit
+        self.quit || crate::signal::requested()
     }
 
     /// Quit path: stop the log and the port, and wait (bounded) until the
@@ -185,11 +186,8 @@ impl App {
                 params.path.clone()
             },
             frame: frame_text(params),
-            encoding: match self.session.encoding() {
-                SessionEncoding::ShiftJis => "Shift_JIS".into(),
-                SessionEncoding::Utf8 => "UTF-8".into(),
-            },
-            link: link_word(self.session.link()),
+            encoding: self.session.encoding().label().into(),
+            link: link_state(self.session.link()),
             log: log_word(self.session.log_state()),
             rx: self.session.rx_bytes(),
             tx: self.session.tx_bytes(),
@@ -446,10 +444,9 @@ impl App {
             Command::Baud => {
                 self.open_text(Modal::Baud, self.session.params().baud_rate.to_string())
             }
-            Command::Encoding => self.open_text(
-                Modal::Encoding,
-                encoding_token(self.session.encoding()).into(),
-            ),
+            Command::Encoding => {
+                self.open_text(Modal::Encoding, self.session.encoding().token().into())
+            }
             Command::Help => {
                 self.help = true;
                 self.help_scroll = 0;
@@ -496,10 +493,7 @@ impl App {
     }
 
     fn ask_log(&mut self) {
-        if matches!(
-            self.session.log_state(),
-            LogSession::Running(_) | LogSession::Paused(_)
-        ) {
+        if matches!(self.session.log_state(), LogSession::Running(_)) {
             self.session
                 .set_message(Message::error("すでにログ中。先にログを停止"));
             return;
@@ -803,8 +797,6 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
         parity: cli.parity.unwrap_or(settings.serial.parity),
         stop_bits: cli.stop_bits.unwrap_or(settings.serial.stop_bits),
         flow: cli.flow.unwrap_or(settings.serial.flow),
-        dtr_on_open: None,
-        rts: false,
         read_timeout: Duration::from_millis(settings.serial.read_timeout_ms),
     }
 }
@@ -887,36 +879,21 @@ fn stop_label(stop: StopBits) -> &'static str {
     }
 }
 
-fn link_word(link: &Link) -> String {
+fn link_state(link: &Link) -> LinkState {
     match link {
-        Link::Opening { .. } => "接続中".into(),
-        Link::Open { .. } => "接続".into(),
-        Link::Lost { .. } => "喪失".into(),
-        Link::Disconnected => "未接続".into(),
+        Link::Opening { .. } => LinkState::Opening,
+        Link::Open { .. } => LinkState::Open,
+        Link::Lost { .. } => LinkState::Lost,
+        Link::Disconnected => LinkState::Disconnected,
     }
 }
 
 fn log_word(log: &LogSession) -> String {
     match log {
         LogSession::Stopped => "LOG off".into(),
-        LogSession::Running(LogTarget::Text { .. })
-        | LogSession::Paused(LogTarget::Text { .. }) => {
-            if matches!(log, LogSession::Paused(_)) {
-                "LOG 一時停止".into()
-            } else {
-                "LOG on".into()
-            }
-        }
+        LogSession::Running(LogTarget::Text { .. }) => "LOG on".into(),
         LogSession::Running(LogTarget::Binary { .. }) => "LOG bin".into(),
-        LogSession::Paused(LogTarget::Binary { .. }) => "LOG 一時停止".into(),
         LogSession::Failed { .. } => "LOG 失敗".into(),
-    }
-}
-
-fn encoding_token(encoding: SessionEncoding) -> &'static str {
-    match encoding {
-        SessionEncoding::ShiftJis => "sjis",
-        SessionEncoding::Utf8 => "utf8",
     }
 }
 
@@ -1019,6 +996,27 @@ mod tests {
         assert!(text.contains("settings.toml が壊れている"), "{text}");
         assert!(!text.contains("ログを開始した"), "{text}");
         assert_eq!(Some(&Message { severity, text }), app.startup.as_ref());
+    }
+
+    /// The only test that touches the process-wide termination flag.
+    #[test]
+    fn a_termination_signal_makes_the_quit_check_true() {
+        let app = App::with_settings(Cli::default(), Settings::default(), None);
+        assert!(!app.should_quit());
+        crate::signal::request_for_test(true);
+        assert!(app.should_quit());
+        crate::signal::request_for_test(false);
+        assert!(!app.should_quit());
+        #[cfg(unix)]
+        {
+            crate::signal::install().unwrap();
+            // SAFETY: raising a signal whose handler was just installed.
+            assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
+            assert!(app.should_quit());
+            assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+            crate::signal::request_for_test(false);
+            assert!(!app.should_quit());
+        }
     }
 
     fn picker_app(ports: usize) -> App {

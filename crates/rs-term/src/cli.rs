@@ -177,16 +177,47 @@ fn split_flag(arg: &str) -> (String, Option<String>) {
 fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
     match flag {
         "-b" | "--baud" => cli.baud = Some(parse_baud(value)?),
-        "--data" => cli.data_bits = Some(parse_data(value)?),
-        "--parity" => cli.parity = Some(parse_parity(value)?),
-        "--stop" => cli.stop_bits = Some(parse_stop(value)?),
-        "--flow" => cli.flow = Some(parse_flow(value)?),
+        "--data" => {
+            cli.data_bits =
+                Some(DataBits::parse(value).ok_or_else(|| {
+                    format!("データビット `{}` は 5, 6, 7, 8 のどれか", lower(value))
+                })?)
+        }
+        "--parity" => {
+            cli.parity = Some(Parity::parse(value).ok_or_else(|| {
+                format!("パリティ `{}` は none, odd, even のどれか", lower(value))
+            })?)
+        }
+        "--stop" => {
+            cli.stop_bits = Some(
+                StopBits::parse(value)
+                    .ok_or_else(|| format!("ストップビット `{}` は 1 か 2", lower(value)))?,
+            )
+        }
+        "--flow" => {
+            cli.flow = Some(Flow::parse(value).ok_or_else(|| {
+                format!(
+                    "フロー `{}` は none, xonxoff, rtscts のどれか",
+                    lower(value)
+                )
+            })?)
+        }
         "-e" | "--encoding" => cli.encoding = Some(parse_encoding(value)?),
         "--log" => cli.log = Some(PathBuf::from(value)),
         "--prefix" => cli.prefix = parse_prefix(value)?,
         _ => return Err(format!("不明なオプション: {flag}")),
     }
     Ok(())
+}
+
+fn lower(text: &str) -> String {
+    text.to_ascii_lowercase()
+}
+
+/// The encoding dialog uses this too.
+pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
+    SessionEncoding::parse(text)
+        .ok_or_else(|| format!("エンコーディング `{}` は sjis か utf8 だけ", lower(text)))
 }
 
 pub fn parse_baud(text: &str) -> Result<u32, String> {
@@ -197,52 +228,6 @@ pub fn parse_baud(text: &str) -> Result<u32, String> {
         return Err("ボーレートが範囲外（1〜4000000）".into());
     }
     Ok(baud)
-}
-
-pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "sjis" | "shift_jis" | "shift-jis" => Ok(SessionEncoding::ShiftJis),
-        "utf8" | "utf-8" => Ok(SessionEncoding::Utf8),
-        other => Err(format!("エンコーディング `{other}` は sjis か utf8 だけ")),
-    }
-}
-
-fn parse_data(text: &str) -> Result<DataBits, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "5" | "five" => Ok(DataBits::Five),
-        "6" | "six" => Ok(DataBits::Six),
-        "7" | "seven" => Ok(DataBits::Seven),
-        "8" | "eight" => Ok(DataBits::Eight),
-        other => Err(format!("データビット `{other}` は 5, 6, 7, 8 のどれか")),
-    }
-}
-
-fn parse_parity(text: &str) -> Result<Parity, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "n" | "none" => Ok(Parity::None),
-        "o" | "odd" => Ok(Parity::Odd),
-        "e" | "even" => Ok(Parity::Even),
-        other => Err(format!("パリティ `{other}` は none, odd, even のどれか")),
-    }
-}
-
-fn parse_stop(text: &str) -> Result<StopBits, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "1" | "one" => Ok(StopBits::One),
-        "2" | "two" => Ok(StopBits::Two),
-        other => Err(format!("ストップビット `{other}` は 1 か 2")),
-    }
-}
-
-fn parse_flow(text: &str) -> Result<Flow, String> {
-    match text.to_ascii_lowercase().as_str() {
-        "none" => Ok(Flow::None),
-        "xonxoff" | "xon/xoff" => Ok(Flow::XonXoff),
-        "rtscts" | "rts/cts" => Ok(Flow::RtsCts),
-        other => Err(format!(
-            "フロー `{other}` は none, xonxoff, rtscts のどれか"
-        )),
-    }
 }
 
 const PREFIX_USAGE: &str = "プレフィックスは ctrl-英字、ctrl-\\、ctrl-] のどれか（例: ctrl-a）。Ctrl+[ は Esc と同じなど、ほかは区別できない";

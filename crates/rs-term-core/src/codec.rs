@@ -12,6 +12,34 @@ pub enum SessionEncoding {
     ShiftJis,
 }
 
+impl SessionEncoding {
+    /// The spellings the command line, the encoding dialog and
+    /// `settings.toml` accept. Case does not matter.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "sjis" | "shift_jis" | "shift-jis" => Some(Self::ShiftJis),
+            "utf8" | "utf-8" => Some(Self::Utf8),
+            _ => None,
+        }
+    }
+
+    /// The short name the encoding dialog starts with (`parse` takes it back).
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::ShiftJis => "sjis",
+            Self::Utf8 => "utf8",
+        }
+    }
+
+    /// The name the status line shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ShiftJis => "Shift_JIS",
+            Self::Utf8 => "UTF-8",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Newline {
     pub receive: ReceiveNewline,
@@ -278,6 +306,21 @@ impl NewlineConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoding_names_round_trip() {
+        for encoding in [SessionEncoding::ShiftJis, SessionEncoding::Utf8] {
+            assert_eq!(SessionEncoding::parse(encoding.token()), Some(encoding));
+        }
+        assert_eq!(
+            SessionEncoding::parse("Shift_JIS"),
+            Some(SessionEncoding::ShiftJis)
+        );
+        assert_eq!(SessionEncoding::parse("UTF-8"), Some(SessionEncoding::Utf8));
+        assert_eq!(SessionEncoding::parse("euc-jp"), None);
+        assert_eq!(SessionEncoding::ShiftJis.label(), "Shift_JIS");
+        assert_eq!(SessionEncoding::Utf8.label(), "UTF-8");
+    }
 
     #[test]
     fn utf8_chunks_concatenate_to_the_original() {

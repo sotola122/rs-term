@@ -126,7 +126,7 @@ The bottom row shows, from left to right:
 | frame | Baud rate and framing, e.g. `115200 8N1`; `XON/XOFF` or `RTS/CTS` is appended when flow control is on |
 | encoding | `Shift_JIS` or `UTF-8` |
 | link state | `未接続` (disconnected), `接続中` (opening), `接続` (connected), `喪失` (connection lost) |
-| log state | `LOG off`, `LOG on` (text log running), `LOG 一時停止` (paused), `LOG 失敗` (failed), `LOG bin` (binary log running) |
+| log state | `LOG off`, `LOG on` (text log running), `LOG 失敗` (failed), `LOG bin` (binary log running) |
 | `RX n` / `TX n` | Bytes received / sent |
 | message | Right-aligned. Info is plain gray, warnings are prefixed `注意:` (yellow), errors are prefixed `エラー:` (red). A message that does not fit is cut with `…`, or dropped if there is no room |
 
@@ -143,10 +143,12 @@ Behavior:
 
 - Command-line options override the file; the file overrides the built-in defaults. A missing file is not an error.
 - If the file is broken, rs-term starts with the built-in defaults and shows the reason on the status line as an error. The file is never rewritten.
-- The schema is strict. A missing `schema`, a schema other than `1`, a missing table or key, an unknown key, a syntax error, or an out-of-range number rejects the whole file. Write every key, as in the example below.
-- Exception: an unknown `ui.theme_mode` or `terminal.palette` falls back to the default (`dark`, `classic-dark`) with a warning, and the rest of the file still loads.
+- Every table and key is optional. A key you omit takes its built-in default, so an empty file is valid and a file may contain only the keys you want to change.
+- Otherwise the schema is strict. A `schema` other than `1`, an unknown key, a syntax error, or an out-of-range number rejects the whole file.
+- Exception: an unknown `terminal.palette` falls back to `classic-dark` with a warning, and the rest of the file still loads.
+- Legacy keys from older versions are accepted and ignored, with a warning on the status line (`使わない設定を無視した: ui, serial.reconnect`): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
 
-A complete, valid `settings.toml` (these values are the built-in defaults):
+A complete `settings.toml` that lists every key (these values are the built-in defaults; you can delete any line):
 
 ```toml
 schema = 1
@@ -158,8 +160,6 @@ parity = "none"             # none, odd, even
 stop_bits = "one"           # one, two
 flow = "none"               # none, xonxoff, rtscts
 read_timeout_ms = 20        # 1..=100
-reconnect = false
-reopen_on_start = false
 
 [newline]
 receive = "auto"            # cr, crlf, lf, auto
@@ -174,15 +174,6 @@ rows = 24                   # 1..=500
 scrollback = 10000          # 0..=100000
 local_echo = false
 palette = "classic-dark"    # classic-dark, light
-font_family = ""
-font_size_px = 14.0
-font_fallbacks = ["Yu Gothic", "MS Gothic"]
-
-[ui]
-theme_mode = "dark"         # dark, light
-font_family = ""
-font_size_px = 16.0
-ligatures = false
 
 [log]
 directory = ""              # empty: platform default (see Logs)
@@ -192,7 +183,6 @@ rotate_keep = 5             # 1..=20
 text_encoding = "utf-8"     # utf-8 only
 ```
 
-The terminal UI does not use `reconnect`, `reopen_on_start`, the `font_*` keys, or the `[ui]` table. They are part of the schema and must be present and valid, but have no effect in this frontend.
 
 ## Logs
 
