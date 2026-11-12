@@ -402,11 +402,22 @@ impl Session {
             Ok(port) => {
                 let (worker, channels) = serial::spawn(port, current);
                 self.worker = Some(worker);
-                self.params = opened.params.clone();
-                self.applied = Some(opened.params.clone());
-                self.link = Link::Open {
-                    params: opened.params,
-                };
+                // A line setting changed while the port was opening (the
+                // baud dialog) waits in `self.params`; the port was opened
+                // with the older values, so apply the wanted ones now.
+                let mut effective = opened.params.clone();
+                let wanted = &self.params;
+                if wanted.path == effective.path && !same_line(wanted, &effective) {
+                    effective.baud_rate = wanted.baud_rate;
+                    effective.data_bits = wanted.data_bits;
+                    effective.parity = wanted.parity;
+                    effective.stop_bits = wanted.stop_bits;
+                    effective.flow = wanted.flow;
+                    let _ = self.send_command(Command::Apply(effective.clone()));
+                }
+                self.params = effective.clone();
+                self.applied = Some(opened.params);
+                self.link = Link::Open { params: effective };
                 self.pins = None;
                 self.note = None;
                 Ok(EventRx::new(channels))
@@ -718,7 +729,10 @@ impl Session {
             self.link = Link::Open { params };
             Ok(())
         } else if matches!(self.link, Link::Opening { .. }) {
-            Err(SessionError::Busy)
+            // Applied by `finish_connect` once the port is open.
+            self.params = params.clone();
+            self.link = Link::Opening { params };
+            Ok(())
         } else {
             self.params = params;
             Ok(())
@@ -898,6 +912,15 @@ impl Drop for Session {
 enum Echo {
     Text(String),
     Newline,
+}
+
+/// The settings `Command::Apply` changes on an open port.
+fn same_line(a: &SerialParams, b: &SerialParams) -> bool {
+    a.baud_rate == b.baud_rate
+        && a.data_bits == b.data_bits
+        && a.parity == b.parity
+        && a.stop_bits == b.stop_bits
+        && a.flow == b.flow
 }
 
 fn push_chunks(chunks: &mut Vec<Vec<u8>>, bytes: Vec<u8>) {
@@ -2095,5 +2118,72 @@ mod tests {
             session.apply_event(event);
         }
         assert_eq!(session.tx_bytes(), 3);
+    }
+
+    fn begin_opening(session: &mut Session, open: SharedOpen) -> PendingOpen {
+        session
+            .begin_connect_with(
+                SerialParams {
+                    path: "COM9".into(),
+                    baud_rate: 115_200,
+                    ..SerialParams::default()
+                },
+                open,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_baud_change_while_opening_is_applied_when_the_open_finishes() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = session();
+        let pending = begin_opening(&mut session, open);
+        let next = SerialParams {
+            baud_rate: 9_600,
+            ..session.params().clone()
+        };
+        session.set_serial_params(next).unwrap();
+        assert_eq!(session.params().baud_rate, 9_600);
+        assert!(matches!(session.link(), Link::Opening { params } if params.baud_rate == 9_600));
+        let opened = pending.open();
+        let _rx = session.finish_connect(opened).unwrap();
+        assert_eq!(session.params().baud_rate, 9_600);
+        assert!(matches!(session.link(), Link::Open { params } if params.baud_rate == 9_600));
+        wait_until(|| lock(&state).applied.last().map(|p| p.baud_rate) == Some(9_600));
+    }
+
+    #[test]
+    fn a_refused_baud_from_the_opening_period_is_reverted() {
+        let (_state, open) = open_shared(PortState {
+            fail_apply: true,
+            ..empty_state()
+        });
+        let mut session = session();
+        let pending = begin_opening(&mut session, open);
+        let next = SerialParams {
+            baud_rate: 9_600,
+            ..session.params().clone()
+        };
+        session.set_serial_params(next).unwrap();
+        let opened = pending.open();
+        let mut rx = session.finish_connect(opened).unwrap();
+        match wait_event(&mut rx) {
+            Some(event @ IoEvent::ApplyFailed(_)) => session.apply_event(event),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(session.params().baud_rate, 115_200);
+    }
+
+    #[test]
+    fn a_path_change_while_opening_is_still_refused() {
+        let (_state, open) = open_shared(empty_state());
+        let mut session = session();
+        let _pending = begin_opening(&mut session, open);
+        let other = SerialParams {
+            path: "COM10".into(),
+            ..session.params().clone()
+        };
+        assert!(session.set_serial_params(other).is_err());
+        assert_eq!(session.params().path, "COM9");
     }
 }
