@@ -934,7 +934,7 @@ mod tests {
         file.set_len(MAX_PENDING as u64 + 1).unwrap();
         drop(file);
         let error = read_send_file(&path).unwrap_err();
-        assert!(error.contains("上限 16 MiB"), "{error}");
+        assert!(error.contains("16 MiB limit"), "{error}");
         assert!(error.contains(&(MAX_PENDING + 1).to_string()), "{error}");
         let _ = std::fs::remove_dir_all(dir);
     }

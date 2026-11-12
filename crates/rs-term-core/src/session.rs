@@ -348,10 +348,8 @@ impl Session {
                         Err(error) => {
                             self.link = Link::Disconnected;
                             let error = OpenError::Port(error);
-                            self.note = Some(Message::error(format!(
-                                "{} を開けない: {error}",
-                                opened.params.path
-                            )));
+                            self.note =
+                                Some(Message::error(format!("{}: {error}", opened.params.path)));
                             return Err(error);
                         }
                     };
@@ -378,10 +376,7 @@ impl Session {
             Err(error) => {
                 self.link = Link::Disconnected;
                 let error = OpenError::Port(error);
-                self.note = Some(Message::error(format!(
-                    "{} を開けない: {error}",
-                    opened.params.path
-                )));
+                self.note = Some(Message::error(format!("{}: {error}", opened.params.path)));
                 Err(error)
             }
         }
@@ -471,7 +466,7 @@ impl Session {
                 if now.duration_since(since) >= SHUTDOWN_WAIT && !self.reap_warned {
                     self.reap_warned = true;
                     self.note = Some(Message::error(
-                        "シリアルのスレッドが 2 秒以内に終わらない（ポートが応答していない可能性）",
+                        "Serial thread did not stop within 2 seconds (the port may be unresponsive)",
                     ));
                 }
                 still.push((handle, since));
@@ -560,7 +555,7 @@ impl Session {
                 };
             }
         }
-        self.note = Some(Message::error(format!("設定を戻した: {error}")));
+        self.note = Some(Message::error(format!("Settings reverted: {error}")));
     }
 
     /// Route one event from `EventRx`.
@@ -579,7 +574,7 @@ impl Session {
 
     pub fn note_dropped(&mut self, bytes: u64) {
         self.note = Some(Message::warn(format!(
-            "受信が速すぎて計 {bytes} バイトを捨てた"
+            "Receiving too fast; dropped {bytes} bytes in total"
         )));
     }
 
@@ -622,7 +617,7 @@ impl Session {
             && params.path != self.params.path
         {
             return Err(SessionError::Port(PortError::Unsupported(
-                "path の変更は切断してから",
+                "Disconnect before changing the path",
             )));
         }
         if matches!(self.link, Link::Open { .. }) {
@@ -976,7 +971,7 @@ mod tests {
             let mut state = lock(&self.inner);
             if state.fail_apply {
                 return Err(PortError::Io {
-                    message: "ボーレートをポートが受け付けない".into(),
+                    message: "Port rejected the baud rate".into(),
                 });
             }
             state.applied.push(params.clone());
@@ -1080,7 +1075,7 @@ mod tests {
         // here without touching a real device.
         let error = match session.connect_with(SerialParams::default(), |_: &SerialParams| {
             Err(PortError::Io {
-                message: "ポートが見つからない".into(),
+                message: "Port not found".into(),
             })
         }) {
             Err(error) => error,
@@ -1091,7 +1086,7 @@ mod tests {
         assert!(
             session
                 .note()
-                .is_some_and(|note| note.text.contains("を開けない")),
+                .is_some_and(|note| note.text.contains("Port not found")),
             "{:?}",
             session.note()
         );
@@ -1551,7 +1546,7 @@ mod tests {
         assert!(
             session
                 .note()
-                .is_some_and(|note| note.text.contains("設定を戻した")),
+                .is_some_and(|note| note.text.contains("Settings reverted")),
             "{:?}",
             session.note()
         );
