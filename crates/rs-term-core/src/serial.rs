@@ -59,6 +59,53 @@ pub enum Flow {
     RtsCts,
 }
 
+// The spellings below are the one list the command line and `settings.toml`
+// share. Case does not matter.
+
+impl DataBits {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "5" | "five" => Some(Self::Five),
+            "6" | "six" => Some(Self::Six),
+            "7" | "seven" => Some(Self::Seven),
+            "8" | "eight" => Some(Self::Eight),
+            _ => None,
+        }
+    }
+}
+
+impl Parity {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "n" | "none" => Some(Self::None),
+            "o" | "odd" => Some(Self::Odd),
+            "e" | "even" => Some(Self::Even),
+            _ => None,
+        }
+    }
+}
+
+impl StopBits {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "1" | "one" => Some(Self::One),
+            "2" | "two" => Some(Self::Two),
+            _ => None,
+        }
+    }
+}
+
+impl Flow {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "xonxoff" | "xon/xoff" => Some(Self::XonXoff),
+            "rtscts" | "rts/cts" => Some(Self::RtsCts),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialParams {
     pub path: String,
@@ -737,6 +784,21 @@ mod tests {
         assert!(message.contains("スレッドを作れない"), "{message}");
         assert!(message.contains("resource exhausted"), "{message}");
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn frame_spellings_are_shared_and_case_insensitive() {
+        assert_eq!(DataBits::parse("8"), Some(DataBits::Eight));
+        assert_eq!(DataBits::parse("Five"), Some(DataBits::Five));
+        assert_eq!(DataBits::parse("9"), None);
+        assert_eq!(Parity::parse("E"), Some(Parity::Even));
+        assert_eq!(Parity::parse("none"), Some(Parity::None));
+        assert_eq!(Parity::parse("mark"), None);
+        assert_eq!(StopBits::parse("2"), Some(StopBits::Two));
+        assert_eq!(StopBits::parse("three"), None);
+        assert_eq!(Flow::parse("RTS/CTS"), Some(Flow::RtsCts));
+        assert_eq!(Flow::parse("xonxoff"), Some(Flow::XonXoff));
+        assert_eq!(Flow::parse("dtr"), None);
     }
 
     #[test]

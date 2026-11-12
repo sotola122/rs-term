@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
 use crate::screen::Rgb;
+use crate::serial::{DataBits, Flow, Parity, StopBits};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalPalette {
@@ -181,10 +182,10 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SerialSettings {
     pub baud_rate: u32,
-    pub data_bits: crate::DataBits,
-    pub parity: crate::Parity,
-    pub stop_bits: crate::StopBits,
-    pub flow: crate::Flow,
+    pub data_bits: DataBits,
+    pub parity: Parity,
+    pub stop_bits: StopBits,
+    pub flow: Flow,
     pub read_timeout_ms: u64,
 }
 
@@ -210,10 +211,10 @@ impl Default for Settings {
         Self {
             serial: SerialSettings {
                 baud_rate: 115_200,
-                data_bits: crate::DataBits::Eight,
-                parity: crate::Parity::None,
-                stop_bits: crate::StopBits::One,
-                flow: crate::Flow::None,
+                data_bits: DataBits::Eight,
+                parity: Parity::None,
+                stop_bits: StopBits::One,
+                flow: Flow::None,
                 read_timeout_ms: 20,
             },
             newline: Newline {
@@ -441,43 +442,42 @@ pub fn load_settings_file(path: &Path) -> Result<Settings, String> {
 fn pick<T>(
     text: Option<String>,
     default: T,
-    parse: impl Fn(&str) -> Result<T, String>,
+    key: &str,
+    parse: fn(&str) -> Option<T>,
 ) -> Result<T, String> {
     match text {
-        Some(text) => parse(&text),
+        Some(text) => parse(&text).ok_or_else(|| format!("{key} `{text}` は未知")),
         None => Ok(default),
     }
 }
 
 fn interpret(raw: RawSettings) -> Result<Settings, String> {
-    let defaults = Settings::default();
+    let d = Settings::default();
     let (serial, terminal, log) = (raw.serial, raw.terminal, raw.log);
-    let baud_rate = serial.baud_rate.unwrap_or(defaults.serial.baud_rate);
+    let baud_rate = serial.baud_rate.unwrap_or(d.serial.baud_rate);
     if !(1..=4_000_000).contains(&baud_rate) {
         return Err("serial.baud_rate が範囲外（1〜4000000）".into());
     }
     // Commands are taken between reads, so the timeout bounds key latency
     // and the stop time (review N13).
-    let read_timeout_ms = serial
-        .read_timeout_ms
-        .unwrap_or(defaults.serial.read_timeout_ms);
+    let read_timeout_ms = serial.read_timeout_ms.unwrap_or(d.serial.read_timeout_ms);
     if read_timeout_ms == 0 || read_timeout_ms > 100 {
         return Err("serial.read_timeout_ms が範囲外（1〜100）".into());
     }
-    let scrollback = terminal.scrollback.unwrap_or(defaults.terminal.scrollback);
+    let scrollback = terminal.scrollback.unwrap_or(d.terminal.scrollback);
     if scrollback > 100_000 {
         return Err("terminal.scrollback が範囲外（0〜100000）".into());
     }
-    let columns = terminal.columns.unwrap_or(defaults.terminal.columns);
-    let rows = terminal.rows.unwrap_or(defaults.terminal.rows);
+    let columns = terminal.columns.unwrap_or(d.terminal.columns);
+    let rows = terminal.rows.unwrap_or(d.terminal.rows);
     if !(1..=500).contains(&columns) || !(1..=500).contains(&rows) {
         return Err("terminal.columns または rows が範囲外（1〜500）".into());
     }
-    let rotate_bytes = log.rotate_bytes.unwrap_or(defaults.log.rotate_bytes);
+    let rotate_bytes = log.rotate_bytes.unwrap_or(d.log.rotate_bytes);
     if !(64 * 1024..=1024 * 1024 * 1024).contains(&rotate_bytes) {
         return Err("log.rotate_bytes が範囲外（64 KiB〜1 GiB）".into());
     }
-    let rotate_keep = log.rotate_keep.unwrap_or(defaults.log.rotate_keep);
+    let rotate_keep = log.rotate_keep.unwrap_or(d.log.rotate_keep);
     if !(1..=20).contains(&rotate_keep) {
         return Err("log.rotate_keep が範囲外（1〜20）".into());
     }
@@ -503,7 +503,7 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     if !legacy.is_empty() {
         warnings.push(format!("使わない設定を無視した: {}", legacy.join(", ")));
     }
-    let mut palette = terminal.palette.unwrap_or(defaults.terminal.palette);
+    let mut palette = terminal.palette.unwrap_or(d.terminal.palette);
     if palette_by_name(&palette).is_none() {
         warnings.push(format!(
             "terminal.palette `{palette}` は未知なので classic-dark"
@@ -513,33 +513,52 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     Ok(Settings {
         serial: SerialSettings {
             baud_rate,
-            data_bits: pick(serial.data_bits, defaults.serial.data_bits, parse_data_bits)?,
-            parity: pick(serial.parity, defaults.serial.parity, parse_parity)?,
-            stop_bits: pick(serial.stop_bits, defaults.serial.stop_bits, parse_stop)?,
-            flow: pick(serial.flow, defaults.serial.flow, parse_flow)?,
+            data_bits: pick(
+                serial.data_bits,
+                d.serial.data_bits,
+                "data_bits",
+                DataBits::parse,
+            )?,
+            parity: pick(serial.parity, d.serial.parity, "parity", Parity::parse)?,
+            stop_bits: pick(
+                serial.stop_bits,
+                d.serial.stop_bits,
+                "stop_bits",
+                StopBits::parse,
+            )?,
+            flow: pick(serial.flow, d.serial.flow, "flow", Flow::parse)?,
             read_timeout_ms,
         },
         newline: Newline {
-            receive: pick(raw.newline.receive, defaults.newline.receive, parse_receive)?,
+            receive: pick(
+                raw.newline.receive,
+                d.newline.receive,
+                "receive",
+                parse_receive,
+            )?,
             transmit: pick(
                 raw.newline.transmit,
-                defaults.newline.transmit,
+                d.newline.transmit,
+                "transmit",
                 parse_transmit,
             )?,
         },
-        encoding: pick(raw.encoding.session, defaults.encoding, |text| {
-            SessionEncoding::parse(text).ok_or_else(|| format!("encoding `{text}` は未知"))
-        })?,
+        encoding: pick(
+            raw.encoding.session,
+            d.encoding,
+            "encoding",
+            SessionEncoding::parse,
+        )?,
         terminal: TerminalSettings {
             columns,
             rows,
             scrollback,
-            local_echo: terminal.local_echo.unwrap_or(defaults.terminal.local_echo),
+            local_echo: terminal.local_echo.unwrap_or(d.terminal.local_echo),
             palette,
         },
         log: LogSettings {
-            directory: log.directory.unwrap_or(defaults.log.directory),
-            name_template: log.name_template.unwrap_or(defaults.log.name_template),
+            directory: log.directory.unwrap_or(d.log.directory),
+            name_template: log.name_template.unwrap_or(d.log.name_template),
             rotate_bytes,
             rotate_keep,
         },
@@ -547,58 +566,22 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     })
 }
 
-pub fn parse_data_bits(text: &str) -> Result<crate::DataBits, String> {
-    match text {
-        "five" => Ok(crate::DataBits::Five),
-        "six" => Ok(crate::DataBits::Six),
-        "seven" => Ok(crate::DataBits::Seven),
-        "eight" => Ok(crate::DataBits::Eight),
-        other => Err(format!("data_bits `{other}` は未知")),
+fn parse_receive(text: &str) -> Option<ReceiveNewline> {
+    match text.to_ascii_lowercase().as_str() {
+        "cr" => Some(ReceiveNewline::Cr),
+        "crlf" => Some(ReceiveNewline::CrLf),
+        "lf" => Some(ReceiveNewline::Lf),
+        "auto" => Some(ReceiveNewline::Auto),
+        _ => None,
     }
 }
 
-pub fn parse_parity(text: &str) -> Result<crate::Parity, String> {
-    match text {
-        "none" => Ok(crate::Parity::None),
-        "odd" => Ok(crate::Parity::Odd),
-        "even" => Ok(crate::Parity::Even),
-        other => Err(format!("parity `{other}` は未知")),
-    }
-}
-
-pub fn parse_stop(text: &str) -> Result<crate::StopBits, String> {
-    match text {
-        "one" => Ok(crate::StopBits::One),
-        "two" => Ok(crate::StopBits::Two),
-        other => Err(format!("stop_bits `{other}` は未知")),
-    }
-}
-
-pub fn parse_flow(text: &str) -> Result<crate::Flow, String> {
-    match text {
-        "none" => Ok(crate::Flow::None),
-        "xonxoff" => Ok(crate::Flow::XonXoff),
-        "rtscts" => Ok(crate::Flow::RtsCts),
-        other => Err(format!("flow `{other}` は未知")),
-    }
-}
-
-pub fn parse_receive(text: &str) -> Result<ReceiveNewline, String> {
-    match text {
-        "cr" => Ok(ReceiveNewline::Cr),
-        "crlf" => Ok(ReceiveNewline::CrLf),
-        "lf" => Ok(ReceiveNewline::Lf),
-        "auto" => Ok(ReceiveNewline::Auto),
-        other => Err(format!("receive `{other}` は未知")),
-    }
-}
-
-pub fn parse_transmit(text: &str) -> Result<TransmitNewline, String> {
-    match text {
-        "cr" => Ok(TransmitNewline::Cr),
-        "crlf" => Ok(TransmitNewline::CrLf),
-        "lf" => Ok(TransmitNewline::Lf),
-        other => Err(format!("transmit `{other}` は未知")),
+fn parse_transmit(text: &str) -> Option<TransmitNewline> {
+    match text.to_ascii_lowercase().as_str() {
+        "cr" => Some(TransmitNewline::Cr),
+        "crlf" => Some(TransmitNewline::CrLf),
+        "lf" => Some(TransmitNewline::Lf),
+        _ => None,
     }
 }
 
@@ -660,7 +643,7 @@ text_encoding = "utf-8"
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.serial.baud_rate, 115_200);
         assert_eq!(loaded.terminal.scrollback, 10_000);
-        // The README says these values are the built-in defaults.
+        // The README says these values are the built-in d.
         assert_eq!(loaded, Settings::default());
     }
 
@@ -732,15 +715,15 @@ scrollback = 500
 session = \"utf-8\"
 ";
         let loaded = load_settings_str(text).unwrap();
-        let defaults = Settings::default();
+        let d = Settings::default();
         assert_eq!(loaded.serial.baud_rate, 9600);
-        assert_eq!(loaded.serial.parity, crate::Parity::Even);
-        assert_eq!(loaded.serial.data_bits, defaults.serial.data_bits);
+        assert_eq!(loaded.serial.parity, Parity::Even);
+        assert_eq!(loaded.serial.data_bits, d.serial.data_bits);
         assert_eq!(loaded.terminal.scrollback, 500);
-        assert_eq!(loaded.terminal.columns, defaults.terminal.columns);
+        assert_eq!(loaded.terminal.columns, d.terminal.columns);
         assert_eq!(loaded.encoding, SessionEncoding::Utf8);
-        assert_eq!(loaded.newline, defaults.newline);
-        assert_eq!(loaded.log, defaults.log);
+        assert_eq!(loaded.newline, d.newline);
+        assert_eq!(loaded.log, d.log);
         assert!(loaded.warnings.is_empty());
     }
 
