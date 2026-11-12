@@ -5,7 +5,8 @@
 //! number rejects the whole file. The file is not rewritten.
 //! Two things do not reject the file. An unknown `terminal.palette` falls back
 //! and is reported. The GUI-era keys the TUI never used (`serial.reconnect`,
-//! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` table) are ignored
+//! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` and `[layout]`
+//! tables) are ignored
 //! and reported in one warning.
 
 use std::fs;
@@ -258,6 +259,7 @@ struct RawSettings {
     #[serde(default)]
     log: RawLog,
     ui: Option<IgnoredAny>,
+    layout: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -496,6 +498,7 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
         ("terminal.font_size_px", terminal.font_size_px.is_some()),
         ("terminal.font_fallbacks", terminal.font_fallbacks.is_some()),
         ("ui", raw.ui.is_some()),
+        ("layout", raw.layout.is_some()),
     ]
     .into_iter()
     .filter_map(|(name, present)| present.then_some(name))
@@ -668,13 +671,6 @@ text_encoding = "utf-8"
     }
 
     #[test]
-    fn layout_is_not_a_core_setting() {
-        // Layout belongs to the terminal multiplexer, not to rs-term.
-        let text = format!("{SAMPLE}\n[layout]\n");
-        assert!(load_settings_str(&text).is_err());
-    }
-
-    #[test]
     fn out_of_range_rejects_the_file() {
         let text = SAMPLE.replace("baud_rate = 115200", "baud_rate = 0");
         assert!(load_settings_str(&text).is_err());
@@ -790,6 +786,31 @@ font_fallbacks = [\"a\"]"
             ..Settings::default()
         };
         assert_eq!(loaded, expected);
+    }
+
+    #[test]
+    fn the_old_layout_tables_are_ignored_and_named() {
+        let text = format!(
+            "{}
+[layout.tree]
+kind = \"split\"
+
+[[layout.panes]]
+id = 1
+
+[[layout.panes]]
+id = 2
+",
+            SAMPLE.replace("baud_rate = 115200", "baud_rate = 9600")
+        );
+        let loaded = load_settings_str(&text).unwrap();
+        assert_eq!(loaded.serial.baud_rate, 9600);
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        assert!(
+            loaded.warnings[0].ends_with("layout"),
+            "{:?}",
+            loaded.warnings
+        );
     }
 
     #[test]
