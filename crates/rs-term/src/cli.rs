@@ -3,7 +3,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use rs_term_core::{AmbiguousWidth, DataBits, Flow, Parity, SessionEncoding, StopBits};
+use rs_term_core::{
+    parse_switch, AmbiguousWidth, DataBits, Flow, Parity, SessionEncoding, StopBits,
+};
 
 use crate::keys::Prefix;
 
@@ -24,6 +26,9 @@ Options:
       --parity <none|odd|even>
       --stop <1|2>
       --flow <none|xonxoff|rtscts>
+      --dtr <on|off>          DTR level after opening (default off)
+      --rts <on|off>          RTS level after opening (default off; ignored with
+                              --flow rtscts, where the driver owns RTS)
   -e, --encoding <sjis|utf8>
       --log <PATH>            write a text log to this file from startup
       --prefix <ctrl-a>       prefix key (ctrl-LETTER, ctrl-\\, ctrl-]; default ctrl-a)
@@ -48,6 +53,8 @@ pub struct Cli {
     pub parity: Option<Parity>,
     pub stop_bits: Option<StopBits>,
     pub flow: Option<Flow>,
+    pub dtr: Option<bool>,
+    pub rts: Option<bool>,
     pub encoding: Option<SessionEncoding>,
     pub log: Option<PathBuf>,
     pub prefix: Prefix,
@@ -153,6 +160,8 @@ fn is_option(flag: &str) -> bool {
             | "--parity"
             | "--stop"
             | "--flow"
+            | "--dtr"
+            | "--rts"
             | "-e"
             | "--encoding"
             | "--log"
@@ -209,6 +218,8 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
                 )
             })?)
         }
+        "--dtr" => cli.dtr = Some(switch(flag, value)?),
+        "--rts" => cli.rts = Some(switch(flag, value)?),
         "-e" | "--encoding" => cli.encoding = Some(parse_encoding(value)?),
         "--log" => cli.log = Some(PathBuf::from(value)),
         "--prefix" => cli.prefix = parse_prefix(value)?,
@@ -220,6 +231,10 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
         _ => return Err(format!("Unknown option: {flag}")),
     }
     Ok(())
+}
+
+fn switch(flag: &str, value: &str) -> Result<bool, String> {
+    parse_switch(value).ok_or_else(|| format!("{flag} `{}` must be on or off", lower(value)))
 }
 
 fn lower(text: &str) -> String {
@@ -281,6 +296,16 @@ mod tests {
         assert_eq!(cli.encoding, Some(SessionEncoding::ShiftJis));
         assert_eq!(cli.log.unwrap(), PathBuf::from("run.log"));
         assert_eq!(cli.prefix.ctrl, 'a');
+    }
+
+    #[test]
+    fn parses_the_dtr_and_rts_options() {
+        let cli = parse(["COM1"]).unwrap();
+        assert_eq!((cli.dtr, cli.rts), (None, None));
+        let cli = parse(["--dtr", "on", "--rts=OFF"]).unwrap();
+        assert_eq!((cli.dtr, cli.rts), (Some(true), Some(false)));
+        let error = parse(["--dtr", "high"]).unwrap_err();
+        assert!(error.contains("on or off"), "{error}");
     }
 
     #[test]

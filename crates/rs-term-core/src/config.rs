@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
 use crate::screen::{AmbiguousWidth, Rgb};
-use crate::serial::{DataBits, Flow, Parity, StopBits};
+use crate::serial::{parse_switch, DataBits, Flow, Parity, StopBits};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalPalette {
@@ -187,6 +187,8 @@ pub struct SerialSettings {
     pub parity: Parity,
     pub stop_bits: StopBits,
     pub flow: Flow,
+    pub dtr: bool,
+    pub rts: bool,
     pub read_timeout_ms: u64,
 }
 
@@ -217,6 +219,8 @@ impl Default for Settings {
                 parity: Parity::None,
                 stop_bits: StopBits::One,
                 flow: Flow::None,
+                dtr: false,
+                rts: false,
                 read_timeout_ms: 20,
             },
             newline: Newline {
@@ -272,6 +276,8 @@ struct RawSerial {
     parity: Option<String>,
     stop_bits: Option<String>,
     flow: Option<String>,
+    dtr: Option<String>,
+    rts: Option<String>,
     read_timeout_ms: Option<u64>,
     reconnect: Option<IgnoredAny>,
     reopen_on_start: Option<IgnoredAny>,
@@ -540,6 +546,8 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
                 StopBits::parse,
             )?,
             flow: pick(serial.flow, d.serial.flow, "flow", Flow::parse)?,
+            dtr: pick(serial.dtr, d.serial.dtr, "serial.dtr", parse_switch)?,
+            rts: pick(serial.rts, d.serial.rts, "serial.rts", parse_switch)?,
             read_timeout_ms,
         },
         newline: Newline {
@@ -612,6 +620,8 @@ data_bits = "eight"
 parity = "none"
 stop_bits = "one"
 flow = "none"
+dtr = "off"
+rts = "off"
 read_timeout_ms = 20
 
 [newline]
@@ -661,6 +671,43 @@ text_encoding = "utf-8"
         assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Auto);
         // The README says these values are the built-in d.
         assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
+    fn dtr_and_rts_are_optional_on_off_keys_under_serial() {
+        let d = load_settings_str("").unwrap();
+        assert!(!d.serial.dtr && !d.serial.rts);
+        let loaded = load_settings_str(
+            "[serial]
+dtr = \"on\"
+rts = \"OFF\"
+",
+        )
+        .unwrap();
+        assert!(loaded.serial.dtr && !loaded.serial.rts);
+        let error = load_settings_str(
+            "[serial]
+dtr = \"yes\"
+",
+        )
+        .unwrap_err();
+        assert!(error.contains("serial.dtr"), "{error}");
+    }
+
+    #[test]
+    fn the_legacy_pane_dtr_and_rts_keys_still_load() {
+        // The GUI-era file kept them under [[layout.panes]]; the table is ignored.
+        let text = "[serial]
+baud_rate = 9600
+
+[[layout.panes]]
+id = 1
+dtr = \"on\"
+rts = true
+";
+        let loaded = load_settings_str(text).unwrap();
+        assert_eq!(loaded.serial.baud_rate, 9600);
+        assert!(!loaded.serial.dtr && !loaded.serial.rts);
     }
 
     #[test]

@@ -28,8 +28,8 @@ pub use screen::{
     ScreenCell, ScreenCursor, ScreenSnapshot,
 };
 pub use serial::{
-    list_ports, DataBits, Flow, Parity, PortInfo, PortKind, SerialParams, StopBits, UsbIdentity,
-    MAX_PENDING, READ_TIMEOUT,
+    list_ports, parse_switch, DataBits, Flow, Parity, PortInfo, PortKind, SerialParams, StopBits,
+    UsbIdentity, MAX_PENDING, READ_TIMEOUT,
 };
 pub use session::{
     encode_key, line_to_viewport, viewport_to_line, Direction, EventRx, Input, IoEvent, KeyInput,

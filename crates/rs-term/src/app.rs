@@ -810,6 +810,8 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
         parity: cli.parity.unwrap_or(settings.serial.parity),
         stop_bits: cli.stop_bits.unwrap_or(settings.serial.stop_bits),
         flow: cli.flow.unwrap_or(settings.serial.flow),
+        dtr: cli.dtr.unwrap_or(settings.serial.dtr),
+        rts: cli.rts.unwrap_or(settings.serial.rts),
         read_timeout: Duration::from_millis(settings.serial.read_timeout_ms),
     }
 }

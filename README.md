@@ -74,6 +74,8 @@ Defaults come from the built-in values or from `settings.toml` (see [Configurati
 | `--parity <P>` | `none`, `odd`, `even` (also `n`, `o`, `e`) | `none` | Parity |
 | `--stop <N>` | `1`, `2` | `1` | Stop bits |
 | `--flow <F>` | `none`, `xonxoff`, `rtscts` | `none` | Flow control |
+| `--dtr <on\|off>` | `on`, `off` | `off` | DTR level after the port is opened |
+| `--rts <on\|off>` | `on`, `off` | `off` | RTS level after the port is opened. Ignored with `--flow rtscts`, where the driver owns RTS |
 | `-e`, `--encoding <E>` | `sjis`, `utf8` | `sjis` (Shift_JIS) | Session encoding |
 | `--log <PATH>` | file path | none | Start a text log to this file at startup |
 | `--prefix <KEY>` | `ctrl-<letter>`, `ctrl-\`, `ctrl-]` | `ctrl-a` | Prefix key (see below) |
@@ -159,6 +161,8 @@ data_bits = "eight"         # five, six, seven, eight
 parity = "none"             # none, odd, even
 stop_bits = "one"           # one, two
 flow = "none"               # none, xonxoff, rtscts
+dtr = "off"                 # on, off: DTR level after opening
+rts = "off"                 # on, off: RTS level after opening (ignored with rtscts)
 read_timeout_ms = 20        # 1..=100
 
 [newline]
@@ -210,6 +214,7 @@ Example: `ttyUSB0_20260101_093000.log`. While a log is open, a `<file>.lock` fil
 
 - Use Windows Terminal or another VT-capable console host (modern conhost). The app relies on the alternate screen, mouse capture and bracketed paste.
 - On Windows, a port held by another process is reported as in use (`Port is busy (opened by another process)`). Linux reports the same message for a busy or locked port.
+- DTR and RTS: rs-term sets both lines to the configured levels (`--dtr`, `--rts`, `dtr` and `rts` under `[serial]`; both off by default) right after opening the port, on every OS, and applies the same levels again on reconnect and after a baud or frame change. With `--flow rtscts` RTS is left to the driver. On Linux the kernel raises DTR and RTS while it opens the tty, so a very short pulse can still occur before rs-term lowers them; a device that resets on DTR may notice it.
 - Ambiguous-width characters (for example `①`, `°`, `×`, `α`, `★`) are drawn two cells wide by the Windows console host (conhost) when its output code page is a CJK one (932, 936, 949 or 950), and one cell wide elsewhere. `--ambiguous-width` (or `ambiguous_width` under `[terminal]` in `settings.toml`) tells rs-term which to assume: `1` or `2` forces it, and `auto` (the default) means two cells only on Windows, when the console has a visible window of its own (a real conhost window; Windows Terminal, VS Code and Cursor use a hidden pseudo-console window) and the output code page is one of those. Environment variables such as `WT_SESSION` are not consulted, because a conhost window started from another terminal inherits them. On Linux `auto` means one cell. Box drawing and block elements (U+2500 to U+259F) always stay one cell. Copying and logs keep the real characters.
 - CI builds and tests Linux and Windows only.
 

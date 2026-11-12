@@ -95,6 +95,15 @@ impl StopBits {
     }
 }
 
+/// `on` or `off`, for the DTR and RTS options (command line and settings).
+pub fn parse_switch(text: &str) -> Option<bool> {
+    match text.to_ascii_lowercase().as_str() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
 impl Flow {
     pub fn parse(text: &str) -> Option<Self> {
         match text.to_ascii_lowercase().as_str() {
@@ -114,6 +123,11 @@ pub struct SerialParams {
     pub parity: Parity,
     pub stop_bits: StopBits,
     pub flow: Flow,
+    /// Level of the DTR line after the port is opened (default off).
+    pub dtr: bool,
+    /// Level of the RTS line after the port is opened (default off). Not
+    /// touched with `Flow::RtsCts`, where the driver owns the line.
+    pub rts: bool,
     pub read_timeout: Duration,
 }
 
@@ -126,6 +140,8 @@ impl Default for SerialParams {
             parity: Parity::None,
             stop_bits: StopBits::One,
             flow: Flow::None,
+            dtr: false,
+            rts: false,
             read_timeout: READ_TIMEOUT,
         }
     }
@@ -207,6 +223,25 @@ pub(crate) trait PortIo: Send {
     }
     fn apply(&mut self, params: &SerialParams) -> Result<(), PortError>;
     fn set_break(&mut self, on: bool) -> Result<(), PortError>;
+    /// Drive the DTR line. Ports without modem lines may ignore it.
+    fn set_dtr(&mut self, _on: bool) -> Result<(), PortError> {
+        Ok(())
+    }
+    /// Drive the RTS line.
+    fn set_rts(&mut self, _on: bool) -> Result<(), PortError> {
+        Ok(())
+    }
+}
+
+/// Put DTR and RTS at the configured levels. Windows opens with both low and
+/// Linux raises both, so this makes every OS start the same way. RTS is left
+/// alone with hardware flow control. A port without modem lines (a pty, a
+/// virtual port) refuses the request; that is not an error for the link.
+pub(crate) fn apply_lines(port: &mut dyn PortIo, params: &SerialParams) {
+    let _ = port.set_dtr(params.dtr);
+    if params.flow != Flow::RtsCts {
+        let _ = port.set_rts(params.rts);
+    }
 }
 
 pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortError> {
@@ -224,7 +259,9 @@ pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortEr
     let port = builder
         .open()
         .map_err(|error| map_open_error(&params.path, error))?;
-    Ok(Box::new(SerialIo { port }))
+    let mut io = SerialIo { port };
+    apply_lines(&mut io, params);
+    Ok(Box::new(io))
 }
 
 struct SerialIo {
@@ -256,6 +293,8 @@ impl PortIo for SerialIo {
         self.port
             .set_flow_control(map_flow(params.flow))
             .map_err(|error| named("the flow control", error))?;
+        // A change of the frame must not move the modem lines.
+        apply_lines(self, params);
         Ok(())
     }
 
@@ -265,6 +304,18 @@ impl PortIo for SerialIo {
         } else {
             self.port.clear_break().map_err(map_serial_error)
         }
+    }
+
+    fn set_dtr(&mut self, on: bool) -> Result<(), PortError> {
+        self.port
+            .write_data_terminal_ready(on)
+            .map_err(|error| named("DTR", error))
+    }
+
+    fn set_rts(&mut self, on: bool) -> Result<(), PortError> {
+        self.port
+            .write_request_to_send(on)
+            .map_err(|error| named("RTS", error))
     }
 }
 
@@ -770,6 +821,60 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct LineLog(Vec<(&'static str, bool)>);
+
+    impl PortIo for LineLog {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::TimedOut.into())
+        }
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn apply(&mut self, _: &SerialParams) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn set_break(&mut self, _: bool) -> Result<(), PortError> {
+            Ok(())
+        }
+        fn set_dtr(&mut self, on: bool) -> Result<(), PortError> {
+            self.0.push(("dtr", on));
+            Ok(())
+        }
+        fn set_rts(&mut self, on: bool) -> Result<(), PortError> {
+            self.0.push(("rts", on));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lines_default_to_low_and_follow_the_params() {
+        let mut log = LineLog::default();
+        apply_lines(&mut log, &SerialParams::default());
+        assert_eq!(log.0, [("dtr", false), ("rts", false)]);
+        let mut log = LineLog::default();
+        let params = SerialParams {
+            dtr: true,
+            rts: true,
+            ..SerialParams::default()
+        };
+        apply_lines(&mut log, &params);
+        assert_eq!(log.0, [("dtr", true), ("rts", true)]);
+    }
+
+    #[test]
+    fn hardware_flow_control_leaves_rts_alone() {
+        let mut log = LineLog::default();
+        let params = SerialParams {
+            dtr: true,
+            rts: true,
+            flow: Flow::RtsCts,
+            ..SerialParams::default()
+        };
+        apply_lines(&mut log, &params);
+        assert_eq!(log.0, [("dtr", true)]);
+    }
+
     #[test]
     fn a_thread_that_cannot_start_is_an_error_and_closes_the_port() {
         let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -797,6 +902,9 @@ mod tests {
         assert_eq!(Parity::parse("E"), Some(Parity::Even));
         assert_eq!(Parity::parse("none"), Some(Parity::None));
         assert_eq!(Parity::parse("mark"), None);
+        assert_eq!(parse_switch("ON"), Some(true));
+        assert_eq!(parse_switch("off"), Some(false));
+        assert_eq!(parse_switch("1"), None);
         assert_eq!(StopBits::parse("2"), Some(StopBits::Two));
         assert_eq!(StopBits::parse("three"), None);
         assert_eq!(Flow::parse("RTS/CTS"), Some(Flow::RtsCts));
