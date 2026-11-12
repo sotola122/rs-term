@@ -8,32 +8,33 @@ use rs_term_core::{DataBits, Flow, Parity, SessionEncoding, StopBits};
 use crate::keys::Prefix;
 
 pub const HELP: &str = "\
-rs-term — 全画面のシリアル端末
-著作権 2026 sotola122
+rs-term - full-screen serial terminal
+Copyright 2026 sotola122
 
-使い方:
-  rs-term [PORT] [オプション]
+Usage:
+  rs-term [PORT] [OPTIONS]
 
-PORT を省くと、画面の中でポートを選ぶか、パスを入力する。
-1 プロセスが 1 接続。分割は herdr、tmux、Windows Terminal が担当する。
+Without PORT, pick a port or type a path inside the screen.
+One process holds one connection. Splitting is left to herdr, tmux or
+Windows Terminal.
 
-オプション:
-  -b, --baud <N>              ボーレート（1〜4000000、既定 115200）
-      --data <5|6|7|8>        データビット（既定 8）
+Options:
+  -b, --baud <N>              baud rate (1 to 4000000, default 115200)
+      --data <5|6|7|8>        data bits (default 8)
       --parity <none|odd|even>
       --stop <1|2>
       --flow <none|xonxoff|rtscts>
   -e, --encoding <sjis|utf8>
-      --log <PATH>            起動時にテキストログをこのファイルへ書く
-      --prefix <ctrl-a>       プレフィックス（ctrl-英字、ctrl-\\、ctrl-]。既定 ctrl-a）
+      --log <PATH>            write a text log to this file from startup
+      --prefix <ctrl-a>       prefix key (ctrl-LETTER, ctrl-\\, ctrl-]; default ctrl-a)
   -h, --help
 
-プレフィックスの次のキー:
-  c 接続   d 切断   r 再接続   b ブレーク
-  l ログ開始   L ログ停止   s 文字列   f ファイル
-  u ボーレート   e エンコーディング   p ペースト
-  ? ヘルプ   q 終了
-  プレフィックスをもう一度押すと、その制御バイトを送る。
+Keys after the prefix:
+  c connect   d disconnect   r reconnect   b break
+  l log   L stop log   s send   f file
+  u baud   e encoding   p paste
+  ? help   q quit   Esc cancel
+  Press the prefix again to send its control byte.
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -62,7 +63,7 @@ where
             Ok(text) => texts.push(text),
             Err(raw) => {
                 return Err(format!(
-                    "引数が UTF-8 の文字列ではない: {}",
+                    "Argument is not valid UTF-8: {}",
                     raw.to_string_lossy()
                 ))
             }
@@ -101,7 +102,7 @@ where
         if is_option(&flag) {
             let value = match inline {
                 Some(value) if value.is_empty() => {
-                    return Err(format!("{flag} の値が空"));
+                    return Err(format!("{flag} needs a value, but it is empty"));
                 }
                 Some(value) => {
                     index += 1;
@@ -110,7 +111,7 @@ where
                 None => {
                     index += 1;
                     if index >= args.len() || args[index].starts_with('-') {
-                        return Err(format!("{flag} の値が無い"));
+                        return Err(format!("{flag} needs a value"));
                     }
                     let value = args[index].clone();
                     index += 1;
@@ -121,7 +122,7 @@ where
             continue;
         }
         if arg.starts_with('-') {
-            return Err(format!("不明なオプション: {arg}"));
+            return Err(format!("Unknown option: {arg}"));
         }
         take_port(&mut cli, &arg)?;
         index += 1;
@@ -131,10 +132,10 @@ where
 
 fn take_port(cli: &mut Cli, port: &str) -> Result<(), String> {
     if cli.port.is_some() {
-        return Err("ポートは1つだけ指定できる".into());
+        return Err("Only one port can be given".into());
     }
     if port.is_empty() {
-        return Err("ポート名が空".into());
+        return Err("Port name is empty".into());
     }
     cli.port = Some(port.to_string());
     Ok(())
@@ -178,26 +179,27 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
     match flag {
         "-b" | "--baud" => cli.baud = Some(parse_baud(value)?),
         "--data" => {
-            cli.data_bits =
-                Some(DataBits::parse(value).ok_or_else(|| {
-                    format!("データビット `{}` は 5, 6, 7, 8 のどれか", lower(value))
-                })?)
+            cli.data_bits = Some(
+                DataBits::parse(value)
+                    .ok_or_else(|| format!("Data bits `{}` must be 5, 6, 7 or 8", lower(value)))?,
+            )
         }
         "--parity" => {
-            cli.parity = Some(Parity::parse(value).ok_or_else(|| {
-                format!("パリティ `{}` は none, odd, even のどれか", lower(value))
-            })?)
+            cli.parity =
+                Some(Parity::parse(value).ok_or_else(|| {
+                    format!("Parity `{}` must be none, odd or even", lower(value))
+                })?)
         }
         "--stop" => {
             cli.stop_bits = Some(
                 StopBits::parse(value)
-                    .ok_or_else(|| format!("ストップビット `{}` は 1 か 2", lower(value)))?,
+                    .ok_or_else(|| format!("Stop bits `{}` must be 1 or 2", lower(value)))?,
             )
         }
         "--flow" => {
             cli.flow = Some(Flow::parse(value).ok_or_else(|| {
                 format!(
-                    "フロー `{}` は none, xonxoff, rtscts のどれか",
+                    "Flow control `{}` must be none, xonxoff or rtscts",
                     lower(value)
                 )
             })?)
@@ -205,7 +207,7 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
         "-e" | "--encoding" => cli.encoding = Some(parse_encoding(value)?),
         "--log" => cli.log = Some(PathBuf::from(value)),
         "--prefix" => cli.prefix = parse_prefix(value)?,
-        _ => return Err(format!("不明なオプション: {flag}")),
+        _ => return Err(format!("Unknown option: {flag}")),
     }
     Ok(())
 }
@@ -217,20 +219,20 @@ fn lower(text: &str) -> String {
 /// The encoding dialog uses this too.
 pub fn parse_encoding(text: &str) -> Result<SessionEncoding, String> {
     SessionEncoding::parse(text)
-        .ok_or_else(|| format!("エンコーディング `{}` は sjis か utf8 だけ", lower(text)))
+        .ok_or_else(|| format!("Encoding `{}` must be sjis or utf8", lower(text)))
 }
 
 pub fn parse_baud(text: &str) -> Result<u32, String> {
     let baud: u32 = text
         .parse()
-        .map_err(|_| format!("ボーレート `{text}` が数値でない"))?;
+        .map_err(|_| format!("Baud rate `{text}` is not a number"))?;
     if !(1..=4_000_000).contains(&baud) {
-        return Err("ボーレートが範囲外（1〜4000000）".into());
+        return Err("Baud rate is out of range (1 to 4000000)".into());
     }
     Ok(baud)
 }
 
-const PREFIX_USAGE: &str = "プレフィックスは ctrl-英字、ctrl-\\、ctrl-] のどれか（例: ctrl-a）。Ctrl+[ は Esc と同じなど、ほかは区別できない";
+const PREFIX_USAGE: &str = "The prefix must be ctrl-LETTER, ctrl-\\ or ctrl-] (for example ctrl-a). Other keys, such as Ctrl+[ which is Esc, cannot be told apart";
 
 pub fn parse_prefix(text: &str) -> Result<Prefix, String> {
     let lower = text.to_ascii_lowercase();
@@ -288,7 +290,7 @@ mod tests {
 
     #[test]
     fn unknown_flag_and_a_second_port_fail() {
-        assert!(parse(["--nope"]).unwrap_err().contains("不明"));
+        assert!(parse(["--nope"]).unwrap_err().contains("Unknown option"));
         assert!(parse(["COM1", "COM2"]).is_err());
         assert!(parse(["--prefix", "shift-a"]).is_err());
     }
@@ -318,7 +320,7 @@ mod tests {
             "ctrl--", "ctrl-", "ctrl-ab", "a",
         ] {
             let error = parse(["--prefix", spec]).unwrap_err();
-            assert!(error.contains("プレフィックス"), "{spec}: {error}");
+            assert!(error.contains("prefix"), "{spec}: {error}");
         }
     }
 
@@ -340,6 +342,27 @@ mod tests {
         assert!(error.contains("UTF-8"), "{error}");
         let error = parse_os([not_unicode()]).unwrap_err();
         assert!(error.contains("UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn help_and_usage_errors_are_ascii_english() {
+        assert!(HELP.is_ascii() && PREFIX_USAGE.is_ascii());
+        for args in [
+            vec!["--nope"],
+            vec!["--data", "9"],
+            vec!["--parity", "x"],
+            vec!["--stop", "3"],
+            vec!["--flow", "x"],
+            vec!["-e", "x"],
+            vec!["-b", "abc"],
+            vec!["-b", "0"],
+            vec!["-b"],
+            vec!["COM1", "COM2"],
+            vec!["--prefix", "x"],
+        ] {
+            let error = parse(args.clone()).unwrap_err();
+            assert!(error.is_ascii(), "{args:?}: {error}");
+        }
     }
 
     #[test]

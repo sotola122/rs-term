@@ -7,8 +7,6 @@ A full-screen serial terminal for Linux and Windows, a Tera Term-style replaceme
 
 One process is one serial session. There are no built-in panes or tabs: run several instances side by side in tmux, herdr, or Windows Terminal panes and tabs.
 
-Note: the user interface (status line, prompts, help, error messages, `--help`) is in Japanese.
-
 ## Features
 
 - Port picker. You can also type any path (`/dev/ttyUSB0`, `COM3`), even if it is not listed.
@@ -87,30 +85,31 @@ Only one port can be given. Bad arguments are reported on stderr and rs-term exi
 
 ## Key bindings
 
-The default prefix is Ctrl+A. Press the prefix, then one of:
+The default prefix is Ctrl+A (change it with `--prefix`). Press the prefix, then one of:
 
 | Key | Action |
 | --- | --- |
 | `c` | Connect |
 | `d` | Disconnect |
 | `r` | Reconnect |
-| `b` | Send a break (250 ms) |
-| `l` | Start a text log (prompts for a path) |
-| `L` | Stop the log |
-| `s` | Send a string |
-| `f` | Send a file |
-| `u` | Change the baud rate |
-| `e` | Change the encoding (`sjis` or `utf8`) |
-| `p` | Paste the OS clipboard |
-| `?` | Help |
+| `b` | Break: send a break (250 ms) |
+| `l` | Log: start a text log (prompts for a path) |
+| `L` | Stop log |
+| `s` | Send: send a string |
+| `f` | File: send a file |
+| `u` | Baud: change the baud rate |
+| `e` | Encoding: change the encoding (`sjis` or `utf8`) |
+| `p` | Paste: paste the OS clipboard |
+| `?` | Help: show the help overlay |
 | `q` | Quit |
-| `Esc` | Cancel |
+| `Esc` | Cancel: leave the prefix state |
 | the prefix again | Send the prefix's control byte (`0x01` for Ctrl+A) to the port |
 
 Notes:
 
 - Ctrl+C does not quit. It is sent to the port as `0x03`. Quit with the prefix, then `q`.
 - Scrolling: mouse wheel (3 lines per step) or PgUp / PgDn (a page). This moves rs-term's own scrollback.
+  Pressing Enter while scrolled back jumps to the latest output (and sends the newline as usual); other keys and new output do not move the view.
 - Selection: drag with the mouse. The selection is copied with OSC 52, and also to the OS clipboard when it can be opened.
 - Paste: a bracketed paste from the host terminal is sent to the port as text; prefix then `p` pastes the OS clipboard.
 - A log cannot be started while one is running; stop it first with `L`.
@@ -122,13 +121,13 @@ The bottom row shows, from left to right:
 | Item | Meaning |
 | --- | --- |
 | `PREFIX` | Shown only while the prefix key is armed and waiting for the next key |
-| port | The port path, or `未選択` (no port selected) |
+| port | The port path, or `no port` (no port selected) |
 | frame | Baud rate and framing, e.g. `115200 8N1`; `XON/XOFF` or `RTS/CTS` is appended when flow control is on |
 | encoding | `Shift_JIS` or `UTF-8` |
-| link state | `未接続` (disconnected), `接続中` (opening), `接続` (connected), `喪失` (connection lost) |
-| log state | `LOG off`, `LOG on` (text log running), `LOG 失敗` (failed), `LOG bin` (binary log running) |
+| link state | `disconnected`, `connecting` (opening), `connected`, `lost` (connection lost) |
+| log state | `LOG off`, `LOG on` (text log running), `LOG failed`, `LOG bin` (binary log running) |
 | `RX n` / `TX n` | Bytes received / sent |
-| message | Right-aligned. Info is plain gray, warnings are prefixed `注意:` (yellow), errors are prefixed `エラー:` (red). A message that does not fit is cut with `…`, or dropped if there is no room |
+| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`). Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
 
 ## Configuration
 
@@ -146,7 +145,7 @@ Behavior:
 - Every table and key is optional. A key you omit takes its built-in default, so an empty file is valid and a file may contain only the keys you want to change.
 - Otherwise the schema is strict. A `schema` other than `1`, an unknown key, a syntax error, or an out-of-range number rejects the whole file.
 - Exception: an unknown `terminal.palette` falls back to `classic-dark` with a warning, and the rest of the file still loads.
-- Legacy keys from older versions are accepted and ignored, with a warning on the status line (`使わない設定を無視した: ui, serial.reconnect`): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
+- Legacy keys from older versions are accepted and ignored, with a warning on the status line (`Ignored unused settings: ui, serial.reconnect`): `serial.reconnect`, `serial.reopen_on_start`, `terminal.font_family`, `terminal.font_size_px`, `terminal.font_fallbacks`, and the whole `[ui]` and `[layout]` tables (any contents).
 
 A complete `settings.toml` that lists every key (these values are the built-in defaults; you can delete any line):
 
@@ -208,7 +207,7 @@ Example: `ttyUSB0_20260101_093000.log`. While a log is open, a `<file>.lock` fil
 ## Platform notes
 
 - Use Windows Terminal or another VT-capable console host (modern conhost). The app relies on the alternate screen, mouse capture and bracketed paste.
-- On Windows, a port held by another process is reported as in use (`ポートは使用中（他のプロセスが開いている）`). Linux reports the same message for a busy or locked port.
+- On Windows, a port held by another process is reported as in use (`Port is busy (opened by another process)`). Linux reports the same message for a busy or locked port.
 - CI builds and tests Linux and Windows only.
 
 ## Development

@@ -428,15 +428,16 @@ fn platform_log_dir(env: &DirEnv) -> Option<PathBuf> {
 
 pub fn load_settings_str(text: &str) -> Result<Settings, String> {
     let raw: RawSettings =
-        toml::from_str(text).map_err(|error| format!("TOML として読めない: {error}"))?;
+        toml::from_str(text).map_err(|error| format!("Not valid TOML: {error}"))?;
     if let Some(schema) = raw.schema.filter(|schema| *schema != 1) {
-        return Err(format!("schema {schema} は読めない（1 だけ）"));
+        return Err(format!("schema {schema} is not supported (only 1)"));
     }
     interpret(raw)
 }
 
 pub fn load_settings_file(path: &Path) -> Result<Settings, String> {
-    let text = fs::read_to_string(path).map_err(|error| format!("読めない（OS: {error}）"))?;
+    let text =
+        fs::read_to_string(path).map_err(|error| format!("Cannot read the file (OS: {error})"))?;
     load_settings_str(&text)
 }
 
@@ -448,7 +449,7 @@ fn pick<T>(
     parse: fn(&str) -> Option<T>,
 ) -> Result<T, String> {
     match text {
-        Some(text) => parse(&text).ok_or_else(|| format!("{key} `{text}` は未知")),
+        Some(text) => parse(&text).ok_or_else(|| format!("{key} `{text}` is not recognized")),
         None => Ok(default),
     }
 }
@@ -458,37 +459,37 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     let (serial, terminal, log) = (raw.serial, raw.terminal, raw.log);
     let baud_rate = serial.baud_rate.unwrap_or(d.serial.baud_rate);
     if !(1..=4_000_000).contains(&baud_rate) {
-        return Err("serial.baud_rate が範囲外（1〜4000000）".into());
+        return Err("serial.baud_rate is out of range (1 to 4000000)".into());
     }
     // Commands are taken between reads, so the timeout bounds key latency
     // and the stop time (review N13).
     let read_timeout_ms = serial.read_timeout_ms.unwrap_or(d.serial.read_timeout_ms);
     if read_timeout_ms == 0 || read_timeout_ms > 100 {
-        return Err("serial.read_timeout_ms が範囲外（1〜100）".into());
+        return Err("serial.read_timeout_ms is out of range (1 to 100)".into());
     }
     let scrollback = terminal.scrollback.unwrap_or(d.terminal.scrollback);
     if scrollback > 100_000 {
-        return Err("terminal.scrollback が範囲外（0〜100000）".into());
+        return Err("terminal.scrollback is out of range (0 to 100000)".into());
     }
     let columns = terminal.columns.unwrap_or(d.terminal.columns);
     let rows = terminal.rows.unwrap_or(d.terminal.rows);
     if !(1..=500).contains(&columns) || !(1..=500).contains(&rows) {
-        return Err("terminal.columns または rows が範囲外（1〜500）".into());
+        return Err("terminal.columns or rows is out of range (1 to 500)".into());
     }
     let rotate_bytes = log.rotate_bytes.unwrap_or(d.log.rotate_bytes);
     if !(64 * 1024..=1024 * 1024 * 1024).contains(&rotate_bytes) {
-        return Err("log.rotate_bytes が範囲外（64 KiB〜1 GiB）".into());
+        return Err("log.rotate_bytes is out of range (64 KiB to 1 GiB)".into());
     }
     let rotate_keep = log.rotate_keep.unwrap_or(d.log.rotate_keep);
     if !(1..=20).contains(&rotate_keep) {
-        return Err("log.rotate_keep が範囲外（1〜20）".into());
+        return Err("log.rotate_keep is out of range (1 to 20)".into());
     }
     if log
         .text_encoding
         .as_deref()
         .is_some_and(|name| name != "utf-8")
     {
-        return Err("log.text_encoding は utf-8 だけ".into());
+        return Err("log.text_encoding must be utf-8".into());
     }
     let mut warnings = Vec::new();
     let legacy: Vec<&str> = [
@@ -504,12 +505,12 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     .filter_map(|(name, present)| present.then_some(name))
     .collect();
     if !legacy.is_empty() {
-        warnings.push(format!("使わない設定を無視した: {}", legacy.join(", ")));
+        warnings.push(format!("Ignored unused settings: {}", legacy.join(", ")));
     }
     let mut palette = terminal.palette.unwrap_or(d.terminal.palette);
     if palette_by_name(&palette).is_none() {
         warnings.push(format!(
-            "terminal.palette `{palette}` は未知なので classic-dark"
+            "terminal.palette `{palette}` is not recognized; using classic-dark"
         ));
         palette = "classic-dark".into();
     }
@@ -770,7 +771,10 @@ font_fallbacks = [\"a\"]"
         let loaded = load_settings_str(&text).unwrap();
         assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
         let warning = &loaded.warnings[0];
-        assert!(warning.starts_with("使わない設定を無視した: "), "{warning}");
+        assert!(
+            warning.starts_with("Ignored unused settings: "),
+            "{warning}"
+        );
         for key in [
             "serial.reconnect",
             "serial.reopen_on_start",

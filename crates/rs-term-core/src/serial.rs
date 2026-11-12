@@ -212,7 +212,7 @@ pub(crate) trait PortIo: Send {
 pub(crate) fn open_port(params: &SerialParams) -> Result<Box<dyn PortIo>, PortError> {
     if !(1..=4_000_000).contains(&params.baud_rate) {
         return Err(PortError::Io {
-            message: "ボーレートが範囲外（1〜4000000）".into(),
+            message: "Baud rate is out of range (1 to 4000000)".into(),
         });
     }
     let builder = serialport::new(&params.path, params.baud_rate)
@@ -243,19 +243,19 @@ impl PortIo for SerialIo {
     fn apply(&mut self, params: &SerialParams) -> Result<(), PortError> {
         self.port
             .set_baud_rate(params.baud_rate)
-            .map_err(|error| named("ボーレート", error))?;
+            .map_err(|error| named("the baud rate", error))?;
         self.port
             .set_data_bits(map_data_bits(params.data_bits))
-            .map_err(|error| named("データビット", error))?;
+            .map_err(|error| named("the data bits", error))?;
         self.port
             .set_parity(map_parity(params.parity))
-            .map_err(|error| named("パリティ", error))?;
+            .map_err(|error| named("the parity", error))?;
         self.port
             .set_stop_bits(map_stop(params.stop_bits))
-            .map_err(|error| named("ストップビット", error))?;
+            .map_err(|error| named("the stop bits", error))?;
         self.port
             .set_flow_control(map_flow(params.flow))
-            .map_err(|error| named("フロー制御", error))?;
+            .map_err(|error| named("the flow control", error))?;
         Ok(())
     }
 
@@ -270,11 +270,11 @@ impl PortIo for SerialIo {
 
 fn named(field: &str, error: serialport::Error) -> PortError {
     PortError::Io {
-        message: format!("{field}をポートが受け付けない（OS: {}）", error.description),
+        message: format!("Port rejected {field} (OS: {})", error.description),
     }
 }
 
-/// `serialport` errors in Japanese. The OS text stays in parentheses so the
+/// `serialport` errors in English. The OS text stays in parentheses so the
 /// cause can still be searched.
 ///
 /// POSIX `EBUSY` and a failed `TIOCEXCL` / `flock` are both `NoDevice`, with
@@ -294,18 +294,18 @@ pub(crate) fn open_error_text(
     access_denied: bool,
 ) -> String {
     if access_denied || is_in_use(kind, description) {
-        return with_os("ポートは使用中（他のプロセスが開いている）", description);
+        return with_os("Port is busy (opened by another process)", description);
     }
     let what = match kind {
-        serialport::ErrorKind::NoDevice => "ポートが見つからない（抜かれたか、名前が違う）",
-        serialport::ErrorKind::InvalidInput => "設定値をポートが受け付けない",
-        serialport::ErrorKind::Io(io::ErrorKind::NotFound) => "ポートが見つからない",
+        serialport::ErrorKind::NoDevice => "Port not found (unplugged or wrong name)",
+        serialport::ErrorKind::InvalidInput => "Port rejected the settings",
+        serialport::ErrorKind::Io(io::ErrorKind::NotFound) => "Port not found",
         serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => {
-            "アクセスが拒否された（他のアプリが使用中の可能性）"
+            "Access denied (another app may be using the port)"
         }
-        serialport::ErrorKind::Io(io::ErrorKind::TimedOut) => "応答がない（タイムアウト）",
-        serialport::ErrorKind::Io(_) => "入出力エラー",
-        serialport::ErrorKind::Unknown => "原因不明のエラー",
+        serialport::ErrorKind::Io(io::ErrorKind::TimedOut) => "Port not responding (timeout)",
+        serialport::ErrorKind::Io(_) => "I/O error",
+        serialport::ErrorKind::Unknown => "Unknown error",
     };
     with_os(what, description)
 }
@@ -314,7 +314,7 @@ fn with_os(what: &str, description: &str) -> String {
     if description.is_empty() {
         what.to_string()
     } else {
-        format!("{what}（OS: {description}）")
+        format!("{what} (OS: {description})")
     }
 }
 
@@ -466,7 +466,7 @@ fn spawn_with(
         worker_loop(port, outlet, cmd_rx, generation)
     }))
     .map_err(|error| PortError::Io {
-        message: format!("ポートのスレッドを作れない（OS: {error}）"),
+        message: format!("Cannot start the port thread (OS: {error})"),
     })?;
     Ok((
         WorkerHandle {
@@ -545,7 +545,7 @@ struct IoCtx<'a> {
 
 fn read_lost(error: &io::Error) -> PortError {
     PortError::Io {
-        message: format!("ポートとの通信が切れた（OS: {error}）"),
+        message: format!("Port connection lost (OS: {error})"),
     }
 }
 
@@ -574,7 +574,7 @@ fn handle_command(ctx: &mut IoCtx<'_>, out: &mut Outlet, command: Command) -> St
             if ctx.pending.len() - *ctx.pending_at + bytes.len() > MAX_PENDING {
                 out.status(IoEvent::CommandFailed(PortError::Io {
                     message: format!(
-                        "送信待ちが上限 {} MiB を超えるので {} バイトを送らなかった",
+                        "Send backlog would exceed the {} MiB limit; {} bytes not sent",
                         MAX_PENDING / (1024 * 1024),
                         bytes.len()
                     ),
@@ -634,7 +634,7 @@ fn pump_tx(ctx: &mut IoCtx<'_>, out: &mut Outlet) {
             Err(error) => {
                 out.status(IoEvent::CommandFailed(PortError::Io {
                     message: format!(
-                        "送信に失敗し、残り {} バイトを捨てた（OS: {error}）",
+                        "Write failed; dropped the remaining {} bytes (OS: {error})",
                         ctx.pending.len() - *ctx.pending_at
                     ),
                 }));
@@ -670,7 +670,7 @@ fn worker_loop(
             // the device hung up (review R17).
             Ok(0) => {
                 out.status(IoEvent::PortLost(PortError::Io {
-                    message: "ポートとの通信が切れた（EOF）".into(),
+                    message: "Port connection lost (EOF)".into(),
                 }));
                 break;
             }
@@ -781,7 +781,10 @@ mod tests {
             Err(error) => error.to_string(),
             Ok(_) => panic!("the spawn must fail"),
         };
-        assert!(message.contains("スレッドを作れない"), "{message}");
+        assert!(
+            message.contains("Cannot start the port thread"),
+            "{message}"
+        );
         assert!(message.contains("resource exhausted"), "{message}");
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     }
@@ -804,23 +807,23 @@ mod tests {
     #[test]
     fn busy_is_not_reported_as_missing() {
         let busy = serial_error_text(&serialport::ErrorKind::NoDevice, "Device or resource busy");
-        assert!(busy.contains("使用中"), "{busy}");
-        assert!(!busy.contains("見つからない"), "{busy}");
+        assert!(busy.contains("busy"), "{busy}");
+        assert!(!busy.contains("not found"), "{busy}");
         assert!(busy.contains("Device or resource busy"), "{busy}");
 
         let locked = serial_error_text(
             &serialport::ErrorKind::NoDevice,
             "Unable to acquire exclusive lock on serial port",
         );
-        assert!(locked.contains("使用中"), "{locked}");
+        assert!(locked.contains("busy"), "{locked}");
 
         let missing = serial_error_text(&serialport::ErrorKind::NoDevice, "");
-        assert!(missing.contains("見つからない"), "{missing}");
-        assert!(!missing.contains("使用中"), "{missing}");
+        assert!(missing.contains("not found"), "{missing}");
+        assert!(!missing.contains("busy"), "{missing}");
 
         let resource =
             serial_error_text(&serialport::ErrorKind::Io(io::ErrorKind::ResourceBusy), "");
-        assert!(resource.contains("使用中"), "{resource}");
+        assert!(resource.contains("busy"), "{resource}");
     }
 
     #[test]
@@ -832,8 +835,8 @@ mod tests {
             "アクセスが拒否されました。",
             true,
         );
-        assert!(text.contains("ポートは使用中"), "{text}");
-        assert!(!text.contains("見つからない"), "{text}");
+        assert!(text.contains("Port is busy"), "{text}");
+        assert!(!text.contains("not found"), "{text}");
         assert!(text.contains("アクセスが拒否されました。"), "{text}");
         // A missing port (COM77) stays "not found".
         let missing = open_error_text(
@@ -841,8 +844,8 @@ mod tests {
             "指定されたファイルが見つかりません。",
             false,
         );
-        assert!(missing.contains("見つからない"), "{missing}");
-        assert!(!missing.contains("使用中"), "{missing}");
+        assert!(missing.contains("not found"), "{missing}");
+        assert!(!missing.contains("busy"), "{missing}");
     }
 
     #[cfg(windows)]

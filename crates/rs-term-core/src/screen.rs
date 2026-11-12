@@ -155,7 +155,7 @@ impl EventListener for ReplyListener {
                 } else {
                     self.notes
                         .borrow_mut()
-                        .push("非 ASCII の端末応答は捨てた".to_string());
+                        .push("Dropped a non-ASCII terminal reply".to_string());
                 }
             }
             Event::ClipboardStore(_, _)

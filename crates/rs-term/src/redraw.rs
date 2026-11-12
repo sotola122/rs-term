@@ -40,6 +40,7 @@ mod tests {
     fn view() -> StatusView {
         StatusView {
             prefix: false,
+            prefix_label: "Ctrl+A".into(),
             port: "COM3".into(),
             frame: "115200 8N1".into(),
             encoding: "UTF-8".into(),

@@ -1,4 +1,4 @@
-//! Domain errors. Every `Display` is the Japanese text the status line
+//! Domain errors. Every `Display` is the English text the status line
 //! shows. OS text, when there is any, stays in parentheses after it.
 
 use std::fmt;
@@ -47,11 +47,10 @@ pub enum LogError {
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::AlreadyOpen => write!(
-                f,
-                "すでに接続している。先にプレフィックスの次の d で切断する"
-            ),
-            OpenError::Cancelled => write!(f, "接続を取り消した"),
+            OpenError::AlreadyOpen => {
+                write!(f, "Already connected; disconnect first (prefix, then d)")
+            }
+            OpenError::Cancelled => write!(f, "Connection cancelled"),
             OpenError::Port(error) => write!(f, "{error}"),
         }
     }
@@ -62,7 +61,7 @@ impl fmt::Display for PortError {
         match self {
             PortError::Io { message } => write!(f, "{message}"),
             PortError::Unsupported(what) => write!(f, "{what}"),
-            PortError::Closed => write!(f, "ポートが閉じている"),
+            PortError::Closed => write!(f, "Port is closed"),
         }
     }
 }
@@ -71,25 +70,22 @@ impl fmt::Display for SessionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SessionError::NotOpen => {
-                write!(
-                    f,
-                    "未接続なので送らなかった（プレフィックスの次に c で接続）"
-                )
+                write!(f, "Not connected; nothing sent (prefix, then c to connect)")
             }
             SessionError::Port(error) => write!(f, "{error}"),
             SessionError::Unmappable { ch } => write!(
                 f,
-                "「{ch}」(U+{:04X}) は今のエンコーディングで表せないので送らなかった",
+                "'{ch}' (U+{:04X}) cannot be encoded in the current encoding; not sent",
                 *ch as u32
             ),
-            SessionError::Busy => write!(f, "送信の待ち行列が一杯なので送らなかった"),
+            SessionError::Busy => write!(f, "Send queue is full; not sent"),
             SessionError::TooLarge { bytes, limit } => write!(
                 f,
-                "{bytes} バイトは上限 {} MiB を超えるので送らなかった",
+                "{bytes} bytes exceeds the {} MiB limit; not sent",
                 limit / (1024 * 1024)
             ),
             SessionError::NoControlCode { ch } => {
-                write!(f, "Ctrl+{ch} に対応する制御コードが無いので送らなかった")
+                write!(f, "No control code for Ctrl+{ch}; not sent")
             }
         }
     }
@@ -99,13 +95,13 @@ impl fmt::Display for LogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LogError::Busy => {
-                write!(f, "そのログファイルは別のプロセスが使用中")
+                write!(f, "Log file is in use by another process")
             }
             LogError::AlreadyRunning => {
-                write!(f, "すでに別のファイルへログ中。先にログを停止")
+                write!(f, "Already logging to another file; stop logging first")
             }
-            LogError::InvalidName(reason) => write!(f, "ログのファイル名が使えない: {reason}"),
-            LogError::Io { message } => write!(f, "ログの書き込みに失敗: {message}"),
+            LogError::InvalidName(reason) => write!(f, "Invalid log file name: {reason}"),
+            LogError::Io { message } => write!(f, "Log write failed: {message}"),
         }
     }
 }
@@ -119,13 +115,8 @@ impl std::error::Error for LogError {}
 mod tests {
     use super::*;
 
-    fn has_japanese(text: &str) -> bool {
-        text.chars()
-            .any(|ch| matches!(ch, '\u{3040}'..='\u{30FF}' | '\u{4E00}'..='\u{9FFF}'))
-    }
-
     #[test]
-    fn every_message_is_japanese() {
+    fn every_message_is_non_empty_english() {
         let messages = [
             OpenError::AlreadyOpen.to_string(),
             OpenError::Cancelled.to_string(),
@@ -148,15 +139,18 @@ mod tests {
             .to_string(),
         ];
         for message in messages {
-            assert!(has_japanese(&message), "{message}");
+            assert!(!message.is_empty());
+            // The rejected character is quoted as typed; all else is ASCII.
+            let text = message.replace(['😀', 'é'], "?");
+            assert!(text.is_ascii(), "{message}");
         }
     }
 
     #[test]
     fn messages_point_at_tui_controls_not_gui_ones() {
         let text = OpenError::AlreadyOpen.to_string();
-        assert!(text.contains("プレフィックスの次の d"), "{text}");
-        for word in ["ペイン", "パレット", "メニュー", "ボタン", "「切断」"] {
+        assert!(text.contains("prefix, then d"), "{text}");
+        for word in ["pane", "palette", "menu", "button"] {
             assert!(!text.contains(word), "{text}");
         }
     }

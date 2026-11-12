@@ -11,26 +11,25 @@ use rs_term_core::{
 };
 
 use crate::app::{App, ModalBody};
-use crate::status::status_line;
+use crate::status::{status_line, ELLIPSIS};
 
-pub const HELP: &str = "\
-プレフィックス（既定 Ctrl+A）の次のキー
+pub const HELP: &str = "Prefix key (default Ctrl+A), then:
 
-  c  接続          d  切断          r  再接続
-  b  ブレーク（250 ms）
-  l  ログ開始      L  ログ停止
-  s  文字列を送る  f  ファイルを送る
-  u  ボーレート    e  エンコーディング
-  p  クリップボードを貼る
-  ?  このヘルプ    q  終了
-  プレフィックスをもう一度   その制御バイトを送る
-  Esc  取消
+  c  connect          d  disconnect       r  reconnect
+  b  break (250 ms)
+  l  log (start)      L  stop log
+  s  send (a string)  f  file (send a file)
+  u  baud             e  encoding
+  p  paste (clipboard)
+  ?  help             q  quit
+  Prefix again        send the prefix's control byte
+  Esc                 cancel
 
-スクロール   ホイール、PgUp / PgDn
-コピー       ドラッグ（OSC 52 と、取れるときはクリップボード）
-Ctrl+C は終了ではなくポートへ送る。終了はプレフィックスの次の q。
+Scrolling   mouse wheel, PgUp / PgDn; Enter jumps to the latest output
+Copy        drag (OSC 52, and the clipboard when it can be opened)
+Ctrl+C goes to the port; it does not quit. Quit with the prefix, then q.
 
-Esc で閉じる（小さい画面では上下で動かす）
+Esc closes this (Up / Down scroll on a small screen)
 ";
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -242,14 +241,14 @@ fn visible_lines(body: &ModalBody, rows: usize) -> Vec<&(String, bool)> {
         .collect()
 }
 
-/// `text` if it fits in `width` cells, otherwise `…` and its tail, so the end
+/// `text` if it fits in `width` cells, otherwise `...` and its tail, so the end
 /// of a long input (where the cursor is) stays visible on one line.
 fn fit_tail(text: &str, width: usize) -> String {
     if Line::from(text).width() <= width {
         return text.to_string();
     }
     let mut tail: Vec<char> = Vec::new();
-    let mut used = 1;
+    let mut used = ELLIPSIS.len();
     for ch in text.chars().rev() {
         let w = Span::raw(ch.to_string()).width();
         if used + w > width {
@@ -258,8 +257,7 @@ fn fit_tail(text: &str, width: usize) -> String {
         used += w;
         tail.push(ch);
     }
-    tail.push('…');
-    tail.iter().rev().collect()
+    format!("{ELLIPSIS}{}", tail.iter().rev().collect::<String>())
 }
 
 /// The help box, sized from `HELP`: widest line plus border and padding by
@@ -286,7 +284,7 @@ fn draw_help(frame: &mut Frame, scroll: usize) {
     let paragraph = Paragraph::new(HELP)
         .block(
             Block::bordered()
-                .title("ヘルプ")
+                .title("Help")
                 .padding(Padding::horizontal(1)),
         )
         .scroll((scroll, 0));
@@ -340,7 +338,7 @@ mod tests {
                 "missing {line:?} in {screen:#?}"
             );
         }
-        assert!(screen.iter().any(|row| row.contains("Esc で閉じる")));
+        assert!(screen.iter().any(|row| row.contains("Esc closes")));
     }
 
     #[test]
@@ -349,28 +347,28 @@ mod tests {
         let max = help_max_scroll(area);
         assert!(max > 0);
         let top = render_help(80, 10, 0);
-        assert!(!top.iter().any(|row| row.contains("Esc で閉じる")));
+        assert!(!top.iter().any(|row| row.contains("Esc closes")));
         let bottom = render_help(80, 10, max + 5);
-        assert!(bottom.iter().any(|row| row.contains("Esc で閉じる")));
+        assert!(bottom.iter().any(|row| row.contains("Esc closes")));
         assert_eq!(help_max_scroll(Rect::new(0, 0, 80, 24)), 0);
     }
 
     #[test]
     fn fit_tail_keeps_the_end_and_never_splits_a_wide_char() {
         assert_eq!(fit_tail("abc", 5), "abc");
-        assert_eq!(fit_tail("abcdef", 4), "…def");
-        assert_eq!(fit_tail("あいうえお", 6), "…えお");
-        assert_eq!(fit_tail("あいうえお", 5), "…えお");
-        assert_eq!(fit_tail("abc", 0), "…");
+        assert_eq!(fit_tail("abcdef", 5), "...ef");
+        assert_eq!(fit_tail("あいうえお", 7), "...えお");
+        assert_eq!(fit_tail("あいうえお", 6), "...お");
+        assert_eq!(fit_tail("abc", 0), "...");
     }
 
     #[test]
     fn a_long_modal_input_stays_on_one_line_with_its_tail_visible() {
         let long = format!("/very/long/{}/end.log█", "d".repeat(100));
         let body = ModalBody {
-            title: "ログ開始",
+            title: "Start log",
             lines: vec![
-                ("ログファイルのパス".into(), false),
+                ("Path of the log file".into(), false),
                 (format!("> {long}"), false),
             ],
             pinned: 2,
@@ -380,7 +378,7 @@ mod tests {
         let screen = rows(terminal.backend().buffer());
         let row = screen
             .iter()
-            .find(|row| row.contains("> …"))
+            .find(|row| row.contains("> ..."))
             .unwrap_or_else(|| panic!("{screen:#?}"));
         assert!(row.contains("/end.log█"), "{row:?}");
         assert!(Line::from(row.trim_end()).width() <= 80);
@@ -393,7 +391,7 @@ mod tests {
             lines.push((format!("/dev/ttyS{index}"), index == selected));
         }
         ModalBody {
-            title: "ポート",
+            title: "Port",
             lines,
             pinned: 1,
         }
@@ -429,6 +427,30 @@ mod tests {
             assert!(screen
                 .iter()
                 .any(|row| row.contains(&format!("/dev/ttyS{index}"))));
+        }
+    }
+
+    /// Borders and the input cursor are one cell on conhost (measured) and
+    /// stay; every other UI character must be the same width in CJK mode.
+    #[test]
+    fn dialog_chrome_has_no_ambiguous_width_characters() {
+        use unicode_width::UnicodeWidthChar;
+        let mut screens = render_help(80, 24, 0);
+        screens.extend(render_modal(&picker_body(3, 1)));
+        let long = format!("> {}", "d".repeat(100));
+        let body = ModalBody {
+            title: "Start log",
+            lines: vec![("Path of the log file".into(), false), (long, false)],
+            pinned: 2,
+        };
+        screens.extend(render_modal(&body));
+        for row in &screens {
+            for ch in row.chars() {
+                if (0x2500..=0x257F).contains(&(ch as u32)) || ch == '█' {
+                    continue;
+                }
+                assert_eq!(ch.width(), ch.width_cjk(), "{ch:?} in {row:?}");
+            }
         }
     }
 }
