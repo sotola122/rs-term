@@ -79,6 +79,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: Some([0xE8E8E8, 0x1E1E1E, 0x5F5F5F, 0x0E7C0E, 0x8A6000, 0xB3261E]),
     },
+    // Source: https://github.com/morhetz/gruvbox (palette) and https://github.com/alacritty/alacritty-theme/blob/master/themes/gruvbox_dark.toml
     Spec {
         name: "gruvbox-dark",
         aliases: &["gruvbox"],
@@ -92,6 +93,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/morhetz/gruvbox (palette) and https://github.com/alacritty/alacritty-theme/blob/master/themes/gruvbox_light.toml
     Spec {
         name: "gruvbox-light",
         aliases: &[],
@@ -105,6 +107,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/folke/tokyonight.nvim/blob/main/extras/alacritty/tokyonight_night.toml
     Spec {
         name: "tokyo-night",
         aliases: &["tokyonight"],
@@ -114,10 +117,11 @@ const THEMES: &[Spec] = &[
         selection: 0x283457,
         ansi: [
             0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
-            0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
+            0x414868, 0xFF899D, 0x9FE044, 0xFABA4A, 0x8DB0FF, 0xC7A9FF, 0xA4DAFF, 0xC0CAF5,
         ],
         ui: None,
     },
+    // Source: https://github.com/folke/tokyonight.nvim/blob/main/extras/alacritty/tokyonight_storm.toml
     Spec {
         name: "tokyo-night-storm",
         aliases: &["tokyonight-storm"],
@@ -127,10 +131,11 @@ const THEMES: &[Spec] = &[
         selection: 0x2E3C64,
         ansi: [
             0x1D202F, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
-            0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
+            0x414868, 0xFF899D, 0x9FE044, 0xFABA4A, 0x8DB0FF, 0xC7A9FF, 0xA4DAFF, 0xC0CAF5,
         ],
         ui: None,
     },
+    // Source: https://github.com/folke/tokyonight.nvim/blob/main/extras/alacritty/tokyonight_day.toml
     Spec {
         name: "tokyo-night-light",
         aliases: &["tokyo-night-day", "tokyo-day", "tokyonight-day"],
@@ -144,6 +149,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/catppuccin/alacritty/blob/main/catppuccin-mocha.toml
     Spec {
         name: "catppuccin-mocha",
         aliases: &["catppuccin"],
@@ -157,19 +163,21 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/catppuccin/alacritty/blob/main/catppuccin-latte.toml
     Spec {
         name: "catppuccin-latte",
         aliases: &["latte"],
         fg: 0x4C4F69,
         bg: 0xEFF1F5,
         cursor: 0xDC8A78,
-        selection: 0xBCC0CC,
+        selection: 0xDC8A78,
         ansi: [
-            0x5C5F77, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xACB0BE,
-            0x6C6F85, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xBCC0CC,
+            0xBCC0CC, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0x5C5F77,
+            0xACB0BE, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0x6C6F85,
         ],
         ui: None,
     },
+    // Source: https://github.com/dracula/alacritty/blob/master/dracula.toml
     Spec {
         name: "dracula",
         aliases: &[],
@@ -183,6 +191,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/alacritty/alacritty-theme/blob/master/themes/nord.toml (palette: https://www.nordtheme.com)
     Spec {
         name: "nord",
         aliases: &[],
@@ -196,10 +205,11 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/alacritty/alacritty-theme/blob/master/themes/solarized_dark.toml (palette: https://ethanschoonover.com/solarized)
     Spec {
         name: "solarized-dark",
         aliases: &["solarized"],
-        fg: 0x93A1A1,
+        fg: 0x839496,
         bg: 0x002B36,
         cursor: 0x93A1A1,
         selection: 0x073642,
@@ -209,6 +219,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/alacritty/alacritty-theme/blob/master/themes/solarized_light.toml (palette: https://ethanschoonover.com/solarized)
     Spec {
         name: "solarized-light",
         aliases: &[],
@@ -222,6 +233,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/alacritty/alacritty-theme/blob/master/themes/one_dark.toml
     Spec {
         name: "one-dark",
         aliases: &["onedark"],
@@ -230,24 +242,26 @@ const THEMES: &[Spec] = &[
         cursor: 0x528BFF,
         selection: 0x3E4451,
         ansi: [
-            0x282C34, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
-            0x5C6370, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF,
+            0x1E2127, 0xE06C75, 0x98C379, 0xD19A66, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
+            0x5C6370, 0xE06C75, 0x98C379, 0xD19A66, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xFFFFFF,
         ],
         ui: None,
     },
+    // Source: https://github.com/alacritty/alacritty-theme/blob/master/themes/one_light.toml
     Spec {
         name: "one-light",
         aliases: &["onelight"],
-        fg: 0x383A42,
-        bg: 0xFAFAFA,
+        fg: 0x2A2B33,
+        bg: 0xF8F8F8,
         cursor: 0x526FFF,
         selection: 0xE5E5E6,
         ansi: [
-            0x383A42, 0xE45649, 0x50A14F, 0xC18401, 0x4078F2, 0xA626A4, 0x0184BC, 0xA0A1A7,
-            0x4F525E, 0xE45649, 0x50A14F, 0xC18401, 0x4078F2, 0xA626A4, 0x0184BC, 0xFFFFFF,
+            0x000000, 0xDE3D35, 0x3E953A, 0xD2B67B, 0x2F5AF3, 0xA00095, 0x3E953A, 0xBBBBBB,
+            0x000000, 0xDE3D35, 0x3E953A, 0xD2B67B, 0x2F5AF3, 0xA00095, 0x3E953A, 0xFFFFFF,
         ],
         ui: None,
     },
+    // Source: https://github.com/rebelot/kanagawa.nvim/blob/master/extras/alacritty/kanagawa_wave.toml
     Spec {
         name: "kanagawa",
         aliases: &[],
@@ -261,6 +275,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/rebelot/kanagawa.nvim/blob/master/extras/alacritty/kanagawa_lotus.toml
     Spec {
         name: "kanagawa-lotus",
         aliases: &["lotus"],
@@ -274,6 +289,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/rose-pine/alacritty/blob/main/dist/rose-pine.toml
     Spec {
         name: "rose-pine",
         aliases: &["rosepine"],
@@ -287,12 +303,13 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/rose-pine/alacritty/blob/main/dist/rose-pine-dawn.toml
     Spec {
         name: "rose-pine-dawn",
         aliases: &["rosepine-dawn", "dawn"],
         fg: 0x575279,
         bg: 0xFAF4ED,
-        cursor: 0x9893A5,
+        cursor: 0xCECACD,
         selection: 0xDFDAD9,
         ansi: [
             0xF2E9E1, 0xB4637A, 0x286983, 0xEA9D34, 0x56949F, 0x907AA9, 0xD7827E, 0x575279,
@@ -300,6 +317,7 @@ const THEMES: &[Spec] = &[
         ],
         ui: None,
     },
+    // Source: https://github.com/raunofreiberg/vesper (via https://github.com/alacritty/alacritty-theme/blob/master/themes/vesper.toml)
     Spec {
         name: "vesper",
         aliases: &[],
