@@ -36,7 +36,7 @@ Installing a newer MSI replaces the older one (upgrade). The entry under "Instal
 
 #### Trusting the publisher (optional)
 
-The MSI and `rs-term.exe` are signed with a self-issued certificate, not one from a public authority. Windows therefore shows an unknown publisher (UAC or SmartScreen) until you trust it. The installer works either way. To trust it, download `rs-term-codesign.cer` from the release (compare its thumbprint with the one the maintainer published) and run in PowerShell:
+The MSI and `rs-term.exe` are signed with a self-issued certificate, not one from a public authority. Windows therefore shows an unknown publisher (UAC or SmartScreen) until you trust it. The installer works either way. To trust it, download `rs-term-codesign.cer` and `rs-term-codesign.cer.txt` from the release. The text file lists the subject, issuer, validity and the SHA-256 and SHA-1 thumbprints; compare them with `certutil -hashfile rs-term-codesign.cer SHA256` (and `SHA1`). Then run in PowerShell:
 
 ```powershell
 Import-Certificate -FilePath rs-term-codesign.cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
@@ -54,7 +54,7 @@ To check a signature:
 Get-AuthenticodeSignature .\rs-term-<tag>-x86_64-pc-windows-msvc.msi | Format-List Status, StatusMessage, SignerCertificate
 ```
 
-Without the certificate in the stores above, `Status` is `UnknownError` (the chain does not end at a trusted root); the signer thumbprint must match the one in `rs-term-codesign.cer`.
+Without the certificate in the stores above, `Status` is `UnknownError` (the chain does not end at a trusted root); the signer thumbprint must match the SHA-1 value in `rs-term-codesign.cer.txt`.
 
 ### Prebuilt binaries
 
@@ -62,7 +62,7 @@ Pushing a tag that matches `v*` runs the `release` workflow. It runs fmt, clippy
 
 - `rs-term-<tag>-x86_64-pc-windows-msvc.msi` (signed)
 - `rs-term-<tag>-x86_64-pc-windows-msvc.exe` (signed)
-- `rs-term-codesign.cer`
+- `rs-term-codesign.cer` and `rs-term-codesign.cer.txt` (its fingerprints)
 - `rs-term-<tag>-x86_64-unknown-linux-gnu`
 - `LICENSE` and `NOTICE`
 
@@ -289,7 +289,7 @@ The `release` workflow fails unless two repository secrets exist. Create a code-
 gh secret set WINDOWS_SIGN_PFX_PASSWORD
 ```
 
-`.github/scripts/sign.ps1` decodes the PFX to a temporary file, signs with `signtool` (SHA-256, timestamp server `http://timestamp.digicert.com`, override with `SIGN_TIMESTAMP_URL`), exports the public certificate as `rs-term-codesign.cer`, and deletes the temporary PFX. Keep the same certificate across releases so the trust steps above are done once. The MSI source is `installer/rs-term.wxs` (WiX Toolset 5.0.2, installed with `dotnet tool install --global wix --version 5.0.2`); its `UpgradeCode` must never change. `.github/scripts/build-msi.ps1` builds it, taking the version from `crates/rs-term/Cargo.toml`.
+`.github/scripts/sign.ps1` decodes the PFX to a temporary file, signs with `signtool` (SHA-256, timestamp server `http://timestamp.digicert.com`, override with `SIGN_TIMESTAMP_URL`), exports the public certificate as `rs-term-codesign.cer`, and deletes the temporary PFX. The release tag must be `v` plus the version in `crates/rs-term/Cargo.toml`, or the workflow stops before building. Keep the same certificate across releases so the trust steps above are done once. The MSI source is `installer/rs-term.wxs` (WiX Toolset 5.0.2, installed with `dotnet tool install --global wix --version 5.0.2`); its `UpgradeCode` must never change. `.github/scripts/build-msi.ps1` builds it, taking the version from `crates/rs-term/Cargo.toml`.
 
 ## License
 
