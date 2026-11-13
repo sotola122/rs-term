@@ -17,7 +17,7 @@ jobs:
     name: fmt, clippy, test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: fmt
         run: cargo fmt --all -- --check
@@ -42,7 +42,7 @@ jobs:
               throw "The repository secret $name is not set. A release needs it to sign the Windows files."
             }
           }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Require the tag to match the crate version
         shell: pwsh
         run: |
@@ -78,7 +78,7 @@ jobs:
           WINDOWS_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
           WINDOWS_SIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGN_PFX_PASSWORD }}
         run: .github/scripts/sign.ps1 -Files dist/rs-term-x86_64-pc-windows-msvc.msi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rs-term-x86_64-pc-windows-msvc
           path: dist/
@@ -89,14 +89,14 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
           targets: x86_64-unknown-linux-gnu
       - uses: ./.github/actions/package-release
         with:
           target: x86_64-unknown-linux-gnu
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rs-term-x86_64-unknown-linux-gnu
           path: dist/
@@ -109,7 +109,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Create draft release

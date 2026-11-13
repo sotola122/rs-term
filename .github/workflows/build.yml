@@ -17,7 +17,7 @@ jobs:
     name: x86_64-pc-windows-msvc
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
           targets: x86_64-pc-windows-msvc
@@ -29,7 +29,7 @@ jobs:
         with:
           exe: dist/rs-term.exe
           out: dist/rs-term-x86_64-pc-windows-msvc.msi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rs-term-x86_64-pc-windows-msvc
           path: dist/
@@ -56,14 +56,14 @@ jobs:
     name: x86_64-unknown-linux-gnu
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
           targets: x86_64-unknown-linux-gnu
       - uses: ./.github/actions/package-release
         with:
           target: x86_64-unknown-linux-gnu
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rs-term-x86_64-unknown-linux-gnu
           path: dist/
