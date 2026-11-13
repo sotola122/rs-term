@@ -223,10 +223,10 @@ pub(crate) fn split_paste(text: &str) -> Vec<PastePiece> {
 
 pub(crate) struct NewlineConverter {
     mode: ReceiveNewline,
-    /// Auto mode only: the last byte was a CR that has already been passed
-    /// on. If the next byte is LF the pair is complete; otherwise an LF is
-    /// added first. Nothing is held back, so a CR at the end of a chunk is
-    /// shown at once (review N14).
+    /// Auto mode only: the last byte was a CR, already passed on. An LF right
+    /// after it completes a CRLF and is passed as is; any other LF gets a CR
+    /// first. Nothing is held back, so a CR at the end of a chunk is shown at
+    /// once.
     after_cr: bool,
 }
 
@@ -241,16 +241,6 @@ impl NewlineConverter {
     pub(crate) fn set_mode(&mut self, mode: ReceiveNewline) {
         self.mode = mode;
         self.after_cr = false;
-    }
-
-    /// Complete a CR that ended the stream: an isolated CR is CR LF in Auto.
-    /// Call before a mode change and at the end of a connection.
-    pub(crate) fn finish(&mut self) -> Vec<u8> {
-        if std::mem::take(&mut self.after_cr) {
-            b"\n".to_vec()
-        } else {
-            Vec::new()
-        }
     }
 
     pub(crate) fn push(&mut self, utf8: &[u8]) -> Vec<u8> {
@@ -281,23 +271,17 @@ impl NewlineConverter {
         }
     }
 
+    /// Auto detects the device's line ending: CRLF stays, a bare LF becomes
+    /// CRLF, and a lone CR is only a carriage return (line editors and
+    /// progress bars redraw with it).
     fn push_auto(&mut self, input: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(input.len() + 8);
         for &byte in input {
-            if std::mem::take(&mut self.after_cr) {
-                out.push(b'\n');
-                if byte == b'\n' {
-                    continue;
-                }
-            }
             match byte {
-                b'\r' => {
-                    out.push(b'\r');
-                    self.after_cr = true;
-                }
-                b'\n' => out.extend_from_slice(b"\r\n"),
+                b'\n' if !self.after_cr => out.extend_from_slice(b"\r\n"),
                 other => out.push(other),
             }
+            self.after_cr = byte == b'\r';
         }
         out
     }
@@ -379,23 +363,34 @@ mod tests {
         assert_eq!(convert(ReceiveNewline::Cr, sample), b"a\r\nb\rc\nd");
         assert_eq!(convert(ReceiveNewline::CrLf, sample), b"a\r\n\nb\r\nc\nd");
         assert_eq!(convert(ReceiveNewline::Lf, sample), b"a\r\r\nb\rc\r\nd");
-        assert_eq!(convert(ReceiveNewline::Auto, sample), b"a\r\nb\r\nc\r\nd");
+        assert_eq!(convert(ReceiveNewline::Auto, sample), b"a\r\nb\rc\r\nd");
     }
 
     #[test]
-    fn auto_holds_a_cr_across_chunks() {
-        // A CR at the end of a chunk is passed on at once; the LF of an
-        // isolated CR follows with the next byte or at `finish`.
-        let mut nl = NewlineConverter::new(ReceiveNewline::Auto);
-        assert_eq!(nl.push(b"a\r"), b"a\r");
-        assert_eq!(nl.push(b"\nb"), b"\nb");
+    fn auto_tracks_cr_across_chunks() {
+        let mut crlf = NewlineConverter::new(ReceiveNewline::Auto);
+        assert_eq!(crlf.push(b"a\r"), b"a\r");
+        assert_eq!(crlf.push(b"\nb"), b"\nb");
         let mut lone = NewlineConverter::new(ReceiveNewline::Auto);
         assert_eq!(lone.push(b"a\r"), b"a\r");
-        assert_eq!(lone.push(b"b"), b"\nb");
-        let mut end = NewlineConverter::new(ReceiveNewline::Auto);
-        assert_eq!(end.push(b"x\r"), b"x\r");
-        assert_eq!(end.finish(), b"\n");
-        assert_eq!(end.finish(), b"");
+        assert_eq!(lone.push(b"b"), b"b");
+        let mut lf = NewlineConverter::new(ReceiveNewline::Auto);
+        assert_eq!(lf.push(b"\nx"), b"\r\nx");
+        assert_eq!(lf.push(b"\n"), b"\r\n");
+        let mut double = NewlineConverter::new(ReceiveNewline::Auto);
+        assert_eq!(double.push(b"\r\r\n"), b"\r\r\n");
+    }
+
+    #[test]
+    fn auto_keeps_a_linenoise_redraw_on_one_line() {
+        let redraw = b"\rnexia>  se\x1b[0K\r\x1b[9C";
+        assert_eq!(convert(ReceiveNewline::Auto, redraw), redraw);
+        let mut nl = NewlineConverter::new(ReceiveNewline::Auto);
+        let mut out = Vec::new();
+        for byte in redraw {
+            out.extend(nl.push(&[*byte]));
+        }
+        assert_eq!(out, redraw);
     }
 
     #[test]

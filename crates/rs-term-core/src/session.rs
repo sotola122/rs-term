@@ -639,8 +639,7 @@ impl Session {
     }
 
     pub fn set_newline(&mut self, newline: Newline) {
-        let outcome = self.screen.set_newline(newline);
-        self.log.record_text(&outcome.text);
+        self.screen.set_newline(newline);
         self.newline = newline;
     }
 
