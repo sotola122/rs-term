@@ -250,6 +250,9 @@ impl Message {
     }
 }
 
+/// How long an info note stays on the status line.
+pub const INFO_NOTE_TTL: Duration = Duration::from_secs(3);
+
 pub struct Session {
     screen: Screen,
     encoding: SessionEncoding,
@@ -264,6 +267,9 @@ pub struct Session {
     generation: Arc<AtomicU64>,
     log: LogEngine,
     note: Option<Message>,
+    /// When the current info note was set; warnings and errors do not expire.
+    info_since: Option<Instant>,
+    info_ttl: Duration,
     rx_bytes: u64,
     /// Bytes the port threads of every connection have written. Shared with
     /// the workers, so a disconnect or a cancel needs no bookkeeping.
@@ -294,6 +300,8 @@ impl Session {
             generation: Arc::new(AtomicU64::new(1)),
             log: LogEngine::default(),
             note: None,
+            info_since: None,
+            info_ttl: INFO_NOTE_TTL,
             rx_bytes: 0,
             tx_bytes: Arc::new(AtomicU64::new(0)),
         }
@@ -444,22 +452,38 @@ impl Session {
         self.local_echo
     }
 
+    /// The current note. An info note older than its lifetime is gone.
     pub fn note(&self) -> Option<&Message> {
-        self.note.as_ref()
+        self.note.as_ref().filter(|_| !self.info_expired())
     }
 
     pub fn clear_note(&mut self) {
         self.note = None;
+        self.info_since = None;
     }
 
-    /// Replace the status-line message with a typed one.
+    /// Replace the status-line message with a typed one. An info note
+    /// disappears after about 3 seconds; warnings and errors stay.
     pub fn set_message(&mut self, message: Message) {
+        self.info_since = (message.severity == Severity::Info).then(Instant::now);
         self.note = Some(message);
+    }
+
+    fn info_expired(&self) -> bool {
+        match (&self.note, self.info_since) {
+            (Some(note), Some(since)) => {
+                note.severity == Severity::Info && since.elapsed() >= self.info_ttl
+            }
+            _ => false,
+        }
     }
 
     /// Periodic work, about once a second: flush a quiet log and reap port
     /// threads that were asked to stop.
     pub fn tick(&mut self) {
+        if self.info_expired() {
+            self.clear_note();
+        }
         self.log.tick();
         let now = Instant::now();
         let mut still = Vec::new();
@@ -1021,6 +1045,26 @@ mod tests {
             Ok(port)
         };
         (inner, Box::new(open))
+    }
+
+    #[test]
+    fn an_info_note_expires_but_warnings_and_errors_stay() {
+        let mut s = session();
+        s.set_message(Message::info("Theme: nord"));
+        assert!(s.note().is_some(), "fresh info is shown");
+        s.info_ttl = Duration::ZERO;
+        assert!(s.note().is_none(), "expired info is hidden at once");
+        s.tick();
+        assert!(s.note.is_none(), "tick drops the expired info");
+        for message in [Message::warn("careful"), Message::error("broken")] {
+            s.set_message(message.clone());
+            s.tick();
+            assert_eq!(s.note(), Some(&message));
+        }
+        s.info_ttl = INFO_NOTE_TTL;
+        s.set_message(Message::info("x"));
+        s.tick();
+        assert!(s.note().is_some());
     }
 
     fn session() -> Session {
