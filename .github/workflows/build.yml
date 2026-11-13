@@ -50,6 +50,7 @@ jobs:
         run: |
           $files = Get-ChildItem $env:SIGN_TEST_DIR -File | ForEach-Object FullName
           .github/scripts/sign.ps1 -Files $files -CertOut (Join-Path $env:SIGN_TEST_DIR 'test.cer')
+          .github/scripts/cert-info.ps1 -Cert (Join-Path $env:SIGN_TEST_DIR 'test.cer') -Out (Join-Path $env:SIGN_TEST_DIR 'test.cer.txt')
 
   linux:
     name: x86_64-unknown-linux-gnu
