@@ -10,7 +10,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use rs_term_core::{
-    classic_dark, list_ports, load_settings_file, log_dir_from_env, palette_by_name,
+    default_palette, list_ports, load_settings_file, log_dir_from_env, next_theme, palette_by_name,
     settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
     IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
     OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionError, Settings,
@@ -76,7 +76,8 @@ impl App {
 
     fn with_settings(cli: Cli, settings: Settings, load_note: Option<String>) -> Self {
         let encoding = cli.encoding.unwrap_or(settings.encoding);
-        let palette = palette_by_name(&settings.terminal.palette).unwrap_or_else(classic_dark);
+        let palette = palette_by_name(cli.theme.unwrap_or(&settings.terminal.palette))
+            .unwrap_or_else(default_palette);
         let mut session = Session::new(SessionConfig {
             screen: ScreenConfig {
                 columns: settings.terminal.columns,
@@ -96,8 +97,6 @@ impl App {
         let mut startup = Vec::new();
         if let Some(note) = load_note {
             startup.push(Message::error(note));
-        } else if !settings.warnings.is_empty() {
-            startup.push(Message::warn(settings.warnings.join(" ")));
         }
         let mut app = Self {
             session,
@@ -172,6 +171,19 @@ impl App {
         };
     }
 
+    fn cycle_theme(&mut self, forward: bool) {
+        let name = next_theme(self.palette.name, forward);
+        self.set_theme(name);
+    }
+
+    fn set_theme(&mut self, name: &str) {
+        if let Some(palette) = palette_by_name(name) {
+            self.palette = palette;
+            self.session
+                .set_message(Message::info(format!("Theme: {}", self.palette.name)));
+        }
+    }
+
     pub fn palette(&self) -> &TerminalPalette {
         &self.palette
     }
@@ -183,6 +195,7 @@ impl App {
     pub fn status_view(&self) -> StatusView {
         let params = self.session.params();
         StatusView {
+            colors: self.palette.ui,
             prefix: self.prefix_armed,
             prefix_label: self.prefix.label(),
             port: if params.path.is_empty() {
@@ -314,7 +327,11 @@ impl App {
             return;
         }
         self.prefix_armed = false;
-        self.send_input(Input::Text(text));
+        let note = match self.session.paste(&text) {
+            Ok(bytes) => Message::info(pasted_text(bytes)),
+            Err(error) => Message::error(error.to_string()),
+        };
+        self.session.set_message(note);
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -328,6 +345,10 @@ impl App {
                 Action::Scroll { up, page } => self.scroll_help(up, page),
                 _ => {}
             }
+            return;
+        }
+        if is_shift_insert(&key) {
+            self.paste_clipboard();
             return;
         }
         if self.modal.is_some() {
@@ -461,6 +482,7 @@ impl App {
             }
             Command::Quit => self.quit = true,
             Command::Paste => self.paste_clipboard(),
+            Command::Theme { forward } => self.cycle_theme(forward),
             Command::Cancel => {
                 self.prefix_armed = false;
                 self.help = false;
@@ -524,7 +546,7 @@ impl App {
 
     fn paste_clipboard(&mut self) {
         match clipboard_text() {
-            Some(text) => self.send_input(Input::Text(text)),
+            Some(text) => self.on_paste(text),
             None => self
                 .session
                 .set_message(Message::error("Cannot read the clipboard")),
@@ -756,6 +778,24 @@ impl App {
     }
 }
 
+/// Shift+Insert pastes the OS clipboard on every platform. Ctrl+V stays a
+/// plain 0x16 for the device.
+fn is_shift_insert(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Insert
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+fn pasted_text(bytes: usize) -> String {
+    if bytes == 1 {
+        "Pasted 1 byte".into()
+    } else {
+        format!("Pasted {bytes} bytes")
+    }
+}
+
 /// The startup messages as one: texts joined, colored by the most severe.
 fn combine_startup(messages: Vec<Message>) -> Option<Message> {
     let rank = |severity: Severity| match severity {
@@ -810,6 +850,8 @@ fn params_from(settings: &Settings, cli: &Cli, path: String) -> SerialParams {
         parity: cli.parity.unwrap_or(settings.serial.parity),
         stop_bits: cli.stop_bits.unwrap_or(settings.serial.stop_bits),
         flow: cli.flow.unwrap_or(settings.serial.flow),
+        dtr: cli.dtr.unwrap_or(settings.serial.dtr),
+        rts: cli.rts.unwrap_or(settings.serial.rts),
         read_timeout: Duration::from_millis(settings.serial.read_timeout_ms),
     }
 }
@@ -920,6 +962,103 @@ mod tests {
         dir
     }
 
+    fn press_with(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+        app.on_key(KeyEvent::new(code, modifiers));
+    }
+
+    /// The colors of the top-left terminal cell and of the first status cell.
+    fn drawn_colors(app: &App) -> (ratatui::style::Color, ratatui::style::Color) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::view::draw(frame, app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (buffer[(0, 0)].bg, buffer[(0, 23)].bg)
+    }
+
+    #[test]
+    fn shift_insert_is_the_paste_key_and_ctrl_v_is_not() {
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        assert!(is_shift_insert(&key(KeyCode::Insert, KeyModifiers::SHIFT)));
+        assert!(!is_shift_insert(&key(KeyCode::Insert, KeyModifiers::NONE)));
+        assert!(!is_shift_insert(&key(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL
+        )));
+        assert_eq!(
+            crate::keys::classify(
+                &key(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                Prefix::default(),
+                Focus::Terminal
+            ),
+            Action::Input(Input::Key(KeyInput::Ctrl('v')))
+        );
+    }
+
+    #[test]
+    fn the_paste_message_counts_bytes() {
+        assert_eq!(pasted_text(0), "Pasted 0 bytes");
+        assert_eq!(pasted_text(1), "Pasted 1 byte");
+        assert_eq!(pasted_text(12), "Pasted 12 bytes");
+    }
+
+    #[test]
+    fn a_paste_without_a_port_is_an_error_not_a_count() {
+        let mut app = App::with_settings(Cli::default(), Settings::default(), None);
+        press_with(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.on_paste("abc".into());
+        let (severity, text) = app.status_view().message.unwrap();
+        assert_eq!(severity, Severity::Error);
+        assert!(!text.contains("Pasted"), "{text}");
+    }
+
+    #[test]
+    fn prefix_t_cycles_the_theme_and_redraws_in_its_colors() {
+        use ratatui::style::Color;
+        let mut app = App::with_settings(Cli::default(), Settings::default(), None);
+        assert_eq!(app.palette().name, "dark");
+        // Close the port picker that opens without a port.
+        press_with(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.modal.is_none());
+        let (terminal_bg, status_bg) = drawn_colors(&app);
+        assert_eq!(terminal_bg, Color::Rgb(0, 0, 0));
+
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('t'), KeyModifiers::NONE);
+        assert_eq!(app.palette().name, "light");
+        let (_, message) = app.status_view().message.unwrap();
+        assert_eq!(message, "Theme: light");
+        let (light_terminal, light_status) = drawn_colors(&app);
+        assert_eq!(light_terminal, Color::Rgb(0xFF, 0xFF, 0xFF));
+        assert_ne!(light_status, status_bg);
+
+        // T goes back; the cycle is closed (the last theme wraps to the first).
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('T'), KeyModifiers::SHIFT);
+        assert_eq!(app.palette().name, "dark");
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('T'), KeyModifiers::SHIFT);
+        assert_eq!(
+            app.palette().name,
+            rs_term_core::theme_names().last().unwrap()
+        );
+    }
+
+    #[test]
+    fn the_theme_comes_from_the_command_line_then_the_settings() {
+        let mut settings = Settings::default();
+        settings.terminal.palette = "nord".into();
+        let app = App::with_settings(Cli::default(), settings.clone(), None);
+        assert_eq!(app.palette().name, "nord");
+        let cli = Cli {
+            theme: Some("light"),
+            ..Cli::default()
+        };
+        let app = App::with_settings(cli, settings, None);
+        assert_eq!(app.palette().name, "light");
+    }
+
     #[test]
     fn send_file_reads_a_regular_file() {
         let dir = temp_dir("send-ok");
@@ -1000,7 +1139,6 @@ mod tests {
             ..Cli::default()
         };
         let settings = Settings {
-            warnings: vec!["Ignored unused settings: ui".into()],
             ..Settings::default()
         };
         let app = App::with_settings(cli, settings, Some("Cannot load settings.toml: bad".into()));

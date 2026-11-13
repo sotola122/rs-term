@@ -3,17 +3,17 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use rs_term_core::Severity;
+use rs_term_core::{Rgb, Severity, UiColors};
 
 /// Cut text ends with ASCII dots: "…" is two cells wide on a Japanese
 /// console (code page 932), which would overflow the row by one cell.
 pub const ELLIPSIS: &str = "...";
 
 /// What the right side shows while the prefix is armed.
-pub const PREFIX_COMMANDS: &str = "c connect  d disconnect  r reconnect  b break  l log  L stop log  s send  f file  u baud  e encoding  p paste  ? help  q quit  Esc cancel";
+pub const PREFIX_COMMANDS: &str = "c connect  d disconnect  r reconnect  b break  l log  L stop log  s send  f file  u baud  e encoding  p paste  t theme  ? help  q quit  Esc cancel";
 
 /// The keys alone, for when the full list does not fit.
-pub const PREFIX_KEYS: &str = "c d r b l L s f u e p ? q Esc";
+pub const PREFIX_KEYS: &str = "c d r b l L s f u e p t ? q Esc";
 
 /// The link as the status line shows it: a word and its color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,18 +34,23 @@ impl LinkState {
         }
     }
 
-    fn color(self) -> Color {
+    fn color(self, ui: &UiColors) -> Color {
         match self {
-            Self::Open => Color::Rgb(0x40, 0xC0, 0x40),
-            Self::Opening => Color::Rgb(0xFF, 0xD7, 0x00),
-            Self::Lost => Color::Rgb(0xFF, 0x60, 0x60),
-            Self::Disconnected => Color::Rgb(0x80, 0x80, 0x80),
+            Self::Open => color(ui.ok),
+            Self::Opening => color(ui.warn),
+            Self::Lost => color(ui.error),
+            Self::Disconnected => color(ui.muted),
         }
     }
 }
 
+fn color(rgb: Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusView {
+    pub colors: UiColors,
     pub prefix: bool,
     /// The configured prefix, e.g. "Ctrl+A", for the idle hint.
     pub prefix_label: String,
@@ -70,15 +75,14 @@ pub struct StatusView {
 /// `PREFIX` with the full list, with the keys alone, and last the keys cut
 /// with `...`. Without the prefix the left items are never cut.
 pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
+    let ui = &view.colors;
     let normal = Style::default()
-        .fg(Color::Rgb(0xD4, 0xD4, 0xD4))
-        .bg(Color::Rgb(0x20, 0x20, 0x20));
+        .fg(color(ui.status_fg))
+        .bg(color(ui.status_bg));
+    let warn = color(ui.warn);
     let mut spans = Vec::new();
     if view.prefix {
-        spans.push(Span::styled(
-            "PREFIX  ",
-            normal.fg(Color::Rgb(0xFF, 0xD7, 0x00)),
-        ));
+        spans.push(Span::styled("PREFIX  ", normal.fg(warn)));
     }
     spans.push(Span::styled(
         format!("{}  {}  {}  ", view.port, view.frame, view.encoding),
@@ -86,13 +90,13 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
     ));
     spans.push(Span::styled(
         format!("{}  ", view.link.word()),
-        normal.fg(view.link.color()),
+        normal.fg(view.link.color(ui)),
     ));
     spans.push(Span::styled(
         format!("{}  RX {}  TX {}", view.log, view.rx, view.tx),
         normal,
     ));
-    let dim = Color::Rgb(0x80, 0x80, 0x80);
+    let dim = color(ui.muted);
     let mut left: usize = spans.iter().map(Span::width).sum();
     const GAP: usize = 2;
     let (text, color) = if view.prefix {
@@ -104,7 +108,7 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
             if !fits(left, list) {
                 // Give the whole row to the list: keep only the PREFIX tag.
                 spans.truncate(1);
-                spans[0] = Span::styled("PREFIX", normal.fg(Color::Rgb(0xFF, 0xD7, 0x00)));
+                spans[0] = Span::styled("PREFIX", normal.fg(warn));
                 left = spans[0].width();
                 if fits(left, PREFIX_COMMANDS) {
                     list = PREFIX_COMMANDS;
@@ -115,14 +119,8 @@ pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
     } else {
         match &view.message {
             Some((severity, message)) => match severity {
-                Severity::Error => (
-                    format!("Error: {message}"),
-                    Some(Color::Rgb(0xFF, 0x60, 0x60)),
-                ),
-                Severity::Warn => (
-                    format!("Warning: {message}"),
-                    Some(Color::Rgb(0xFF, 0xD7, 0x00)),
-                ),
+                Severity::Error => (format!("Error: {message}"), Some(color(ui.error))),
+                Severity::Warn => (format!("Warning: {message}"), Some(warn)),
                 Severity::Info => (message.clone(), normal.fg),
             },
             None => (format!("{} ? help", view.prefix_label), Some(dim)),
@@ -160,6 +158,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::widgets::Paragraph;
     use ratatui::Terminal;
+    use rs_term_core::{default_palette, palette_by_name};
 
     fn buffer_text(buffer: &Buffer) -> String {
         let mut text = String::new();
@@ -208,6 +207,7 @@ mod tests {
 
     fn sample(message: Option<(Severity, &str)>) -> StatusView {
         StatusView {
+            colors: default_palette().ui,
             prefix: false,
             prefix_label: "Ctrl+A".into(),
             port: "/dev/ttyUSB0".into(),
@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(left, 73);
         let keys = cells(PREFIX_KEYS);
         let full = cells(PREFIX_COMMANDS);
-        assert_eq!((keys, full), (29, 137));
+        assert_eq!((keys, full), (31, 146));
         // The widest row where the full list still fits, and one cell less.
         let row = render(&view, (left + 2 + full) as u16);
         assert!(row.ends_with(&format!("  {PREFIX_COMMANDS}")), "{row:?}");
@@ -340,12 +340,12 @@ mod tests {
         // The keys fit exactly beside the left items.
         let row = render(&view, (left + 2 + keys) as u16);
         assert_eq!(row, format!("PREFIX  {LEFT}  {PREFIX_KEYS}"));
-        // At 80 columns the keys do not fit beside the left items (104
+        // At 80 columns the keys do not fit beside the left items (106
         // needed), so the left side collapses to PREFIX and the keys follow.
         let row = render(&view, 80);
         assert_eq!(
             row,
-            format!("PREFIX{}{PREFIX_KEYS}", " ".repeat(80 - 6 - 29))
+            format!("PREFIX{}{PREFIX_KEYS}", " ".repeat(80 - 6 - 31))
         );
         assert_eq!(cells(&row), 80);
         // One cell short of the keys beside the left items: collapsed.
@@ -354,15 +354,34 @@ mod tests {
         assert!(!row.contains("/dev/ttyUSB0"), "{row:?}");
         assert!(row.ends_with(PREFIX_KEYS), "{row:?}");
         // Collapsed rows: exact fit, then cut with dots, then nothing.
-        let row = render(&view, 6 + 2 + 29);
+        let row = render(&view, 6 + 2 + 31);
         assert_eq!(row, format!("PREFIX  {PREFIX_KEYS}"));
-        let row = render(&view, 6 + 2 + 28);
-        assert_eq!(row, "PREFIX  c d r b l L s f u e p ? q...");
+        let row = render(&view, 6 + 2 + 30);
+        assert_eq!(row, "PREFIX  c d r b l L s f u e p t ? q...");
         let row = render(&view, 6 + 2 + 3 - 1);
         assert_eq!(row.trim_end(), "PREFIX");
         // The same session without the prefix keeps its left items whole.
         let row = render(&sample(None), 80);
         assert!(row.starts_with(LEFT), "{row:?}");
+    }
+
+    #[test]
+    fn the_colors_follow_the_theme_and_stay_readable() {
+        for name in ["dark", "light", "solarized-light"] {
+            let mut view = sample(Some((Severity::Error, "x")));
+            view.colors = palette_by_name(name).unwrap().ui;
+            let line = status_line(&view, 80);
+            let first = line.spans[0].style;
+            assert_eq!(first.bg, Some(color(view.colors.status_bg)), "{name}");
+            assert_ne!(first.fg, first.bg, "{name}");
+            let last = line.spans.last().unwrap().style;
+            assert_eq!(last.fg, Some(color(view.colors.error)), "{name}");
+            assert_ne!(last.fg, last.bg, "{name}");
+        }
+        let dark = status_line(&sample(None), 80).spans[0].style.bg;
+        let mut light = sample(None);
+        light.colors = palette_by_name("light").unwrap().ui;
+        assert_ne!(dark, status_line(&light, 80).spans[0].style.bg);
     }
 
     #[test]

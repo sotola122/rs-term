@@ -3,11 +3,9 @@
 //! Every table and key is optional; an omitted one takes the built-in default.
 //! A schema other than 1, an unknown key, a syntax error, or an out-of-range
 //! number rejects the whole file. The file is not rewritten.
-//! Two things do not reject the file. An unknown `terminal.palette` falls back
-//! and is reported. The GUI-era keys the TUI never used (`serial.reconnect`,
-//! `serial.reopen_on_start`, `terminal.font_*`, the `[ui]` and `[layout]`
-//! tables) are ignored
-//! and reported in one warning.
+//! An unknown `terminal.palette` is an error too. The GUI-era keys
+//! the TUI never used (`serial.reconnect`, `serial.reopen_on_start`,
+//! `terminal.font_*`, the `[ui]` and `[layout]` tables) are ignored silently.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,159 +14,9 @@ use serde::de::IgnoredAny;
 use serde::Deserialize;
 
 use crate::codec::{Newline, ReceiveNewline, SessionEncoding, TransmitNewline};
-use crate::screen::{AmbiguousWidth, Rgb};
-use crate::serial::{DataBits, Flow, Parity, StopBits};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalPalette {
-    pub name: String,
-    pub foreground: Rgb,
-    pub background: Rgb,
-    pub cursor: Rgb,
-    pub selection: Rgb,
-    pub ansi: [Rgb; 16],
-}
-
-pub fn palette_by_name(name: &str) -> Option<TerminalPalette> {
-    match name {
-        "classic-dark" => Some(classic_dark()),
-        "light" => Some(light_palette()),
-        _ => None,
-    }
-}
-
-pub fn classic_dark() -> TerminalPalette {
-    TerminalPalette {
-        name: "classic-dark".into(),
-        foreground: Rgb {
-            r: 0xD4,
-            g: 0xD4,
-            b: 0xD4,
-        },
-        background: Rgb { r: 0, g: 0, b: 0 },
-        cursor: Rgb {
-            r: 0x00,
-            g: 0xC8,
-            b: 0x00,
-        },
-        selection: Rgb {
-            r: 0x26,
-            g: 0x4F,
-            b: 0x78,
-        },
-        ansi: ANSI_16,
-    }
-}
-
-pub fn light_palette() -> TerminalPalette {
-    TerminalPalette {
-        name: "light".into(),
-        foreground: Rgb {
-            r: 0x1E,
-            g: 0x1E,
-            b: 0x1E,
-        },
-        background: Rgb {
-            r: 0xFF,
-            g: 0xFF,
-            b: 0xFF,
-        },
-        cursor: Rgb {
-            r: 0x00,
-            g: 0x64,
-            b: 0x00,
-        },
-        selection: Rgb {
-            r: 0xAD,
-            g: 0xD6,
-            b: 0xFF,
-        },
-        ansi: ANSI_16,
-    }
-}
-
-const ANSI_16: [Rgb; 16] = [
-    Rgb {
-        r: 0x00,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xCD,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0xCD,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0x00,
-        b: 0xEE,
-    },
-    Rgb {
-        r: 0xCD,
-        g: 0x00,
-        b: 0xCD,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xCD,
-        b: 0xCD,
-    },
-    Rgb {
-        r: 0xE5,
-        g: 0xE5,
-        b: 0xE5,
-    },
-    Rgb {
-        r: 0x7F,
-        g: 0x7F,
-        b: 0x7F,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0x00,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xFF,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0xFF,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x5C,
-        g: 0x5C,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0x00,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0x00,
-        g: 0xFF,
-        b: 0xFF,
-    },
-    Rgb {
-        r: 0xFF,
-        g: 0xFF,
-        b: 0xFF,
-    },
-];
+use crate::screen::AmbiguousWidth;
+use crate::serial::{parse_switch, DataBits, Flow, Parity, StopBits};
+use crate::theme::{canonical_theme_name, theme_list, DEFAULT_THEME};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -177,7 +25,6 @@ pub struct Settings {
     pub encoding: SessionEncoding,
     pub terminal: TerminalSettings,
     pub log: LogSettings,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,6 +34,8 @@ pub struct SerialSettings {
     pub parity: Parity,
     pub stop_bits: StopBits,
     pub flow: Flow,
+    pub dtr: bool,
+    pub rts: bool,
     pub read_timeout_ms: u64,
 }
 
@@ -196,6 +45,7 @@ pub struct TerminalSettings {
     pub rows: usize,
     pub scrollback: usize,
     pub local_echo: bool,
+    /// A theme name, always in its canonical spelling.
     pub palette: String,
     pub ambiguous_width: AmbiguousWidth,
 }
@@ -217,6 +67,8 @@ impl Default for Settings {
                 parity: Parity::None,
                 stop_bits: StopBits::One,
                 flow: Flow::None,
+                dtr: false,
+                rts: false,
                 read_timeout_ms: 20,
             },
             newline: Newline {
@@ -229,7 +81,7 @@ impl Default for Settings {
                 rows: 24,
                 scrollback: 10_000,
                 local_echo: false,
-                palette: "classic-dark".into(),
+                palette: DEFAULT_THEME.into(),
                 ambiguous_width: AmbiguousWidth::Auto,
             },
             log: LogSettings {
@@ -238,14 +90,15 @@ impl Default for Settings {
                 rotate_bytes: 10_485_760,
                 rotate_keep: 5,
             },
-            warnings: Vec::new(),
         }
     }
 }
 
 /// Every table and key is optional: an omitted one takes the built-in
 /// default. The GUI-era keys the TUI never read are still accepted (and
-/// ignored) so an old file keeps loading; they are listed in a warning.
+/// silently ignored) so an old file keeps loading. They are `_`-prefixed
+/// `IgnoredAny` fields, renamed to the old key, so they are never read and
+/// never flagged as dead code.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSettings {
@@ -260,8 +113,10 @@ struct RawSettings {
     terminal: RawTerminal,
     #[serde(default)]
     log: RawLog,
-    ui: Option<IgnoredAny>,
-    layout: Option<IgnoredAny>,
+    #[serde(rename = "ui")]
+    _ui: Option<IgnoredAny>,
+    #[serde(rename = "layout")]
+    _layout: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -272,9 +127,13 @@ struct RawSerial {
     parity: Option<String>,
     stop_bits: Option<String>,
     flow: Option<String>,
+    dtr: Option<String>,
+    rts: Option<String>,
     read_timeout_ms: Option<u64>,
-    reconnect: Option<IgnoredAny>,
-    reopen_on_start: Option<IgnoredAny>,
+    #[serde(rename = "reconnect")]
+    _reconnect: Option<IgnoredAny>,
+    #[serde(rename = "reopen_on_start")]
+    _reopen_on_start: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -299,9 +158,12 @@ struct RawTerminal {
     local_echo: Option<bool>,
     palette: Option<String>,
     ambiguous_width: Option<String>,
-    font_family: Option<IgnoredAny>,
-    font_size_px: Option<IgnoredAny>,
-    font_fallbacks: Option<IgnoredAny>,
+    #[serde(rename = "font_family")]
+    _font_family: Option<IgnoredAny>,
+    #[serde(rename = "font_size_px")]
+    _font_size_px: Option<IgnoredAny>,
+    #[serde(rename = "font_fallbacks")]
+    _font_fallbacks: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -494,29 +356,17 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
     {
         return Err("log.text_encoding must be utf-8".into());
     }
-    let mut warnings = Vec::new();
-    let legacy: Vec<&str> = [
-        ("serial.reconnect", serial.reconnect.is_some()),
-        ("serial.reopen_on_start", serial.reopen_on_start.is_some()),
-        ("terminal.font_family", terminal.font_family.is_some()),
-        ("terminal.font_size_px", terminal.font_size_px.is_some()),
-        ("terminal.font_fallbacks", terminal.font_fallbacks.is_some()),
-        ("ui", raw.ui.is_some()),
-        ("layout", raw.layout.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(name, present)| present.then_some(name))
-    .collect();
-    if !legacy.is_empty() {
-        warnings.push(format!("Ignored unused settings: {}", legacy.join(", ")));
-    }
-    let mut palette = terminal.palette.unwrap_or(d.terminal.palette);
-    if palette_by_name(&palette).is_none() {
-        warnings.push(format!(
-            "terminal.palette `{palette}` is not recognized; using classic-dark"
-        ));
-        palette = "classic-dark".into();
-    }
+    let palette = match terminal.palette {
+        None => d.terminal.palette,
+        Some(name) => canonical_theme_name(&name)
+            .ok_or_else(|| {
+                format!(
+                    "terminal.palette `{name}` is not recognized (use one of: {})",
+                    theme_list()
+                )
+            })?
+            .to_string(),
+    };
     let ambiguous_width = pick(
         terminal.ambiguous_width,
         d.terminal.ambiguous_width,
@@ -540,6 +390,8 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
                 StopBits::parse,
             )?,
             flow: pick(serial.flow, d.serial.flow, "flow", Flow::parse)?,
+            dtr: pick(serial.dtr, d.serial.dtr, "serial.dtr", parse_switch)?,
+            rts: pick(serial.rts, d.serial.rts, "serial.rts", parse_switch)?,
             read_timeout_ms,
         },
         newline: Newline {
@@ -576,7 +428,6 @@ fn interpret(raw: RawSettings) -> Result<Settings, String> {
             rotate_bytes,
             rotate_keep,
         },
-        warnings,
     })
 }
 
@@ -612,6 +463,8 @@ data_bits = "eight"
 parity = "none"
 stop_bits = "one"
 flow = "none"
+dtr = "off"
+rts = "off"
 read_timeout_ms = 20
 
 [newline]
@@ -641,7 +494,6 @@ text_encoding = "utf-8"
     fn sample_loads() {
         let loaded = load_settings_str(SAMPLE).unwrap();
         assert_eq!(loaded.encoding, SessionEncoding::ShiftJis);
-        assert!(loaded.warnings.is_empty());
         assert_eq!(loaded, Settings::default());
     }
 
@@ -655,12 +507,48 @@ text_encoding = "utf-8"
             .map(|(block, _)| block)
             .expect("README has a toml block");
         let loaded = load_settings_str(block).expect("README example must load");
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(loaded.serial.baud_rate, 115_200);
         assert_eq!(loaded.terminal.scrollback, 10_000);
         assert_eq!(loaded.terminal.ambiguous_width, AmbiguousWidth::Auto);
         // The README says these values are the built-in d.
         assert_eq!(loaded, Settings::default());
+    }
+
+    #[test]
+    fn dtr_and_rts_are_optional_on_off_keys_under_serial() {
+        let d = load_settings_str("").unwrap();
+        assert!(!d.serial.dtr && !d.serial.rts);
+        let loaded = load_settings_str(
+            "[serial]
+dtr = \"on\"
+rts = \"OFF\"
+",
+        )
+        .unwrap();
+        assert!(loaded.serial.dtr && !loaded.serial.rts);
+        let error = load_settings_str(
+            "[serial]
+dtr = \"yes\"
+",
+        )
+        .unwrap_err();
+        assert!(error.contains("serial.dtr"), "{error}");
+    }
+
+    #[test]
+    fn the_legacy_pane_dtr_and_rts_keys_still_load() {
+        // The GUI-era file kept them under [[layout.panes]]; the table is ignored.
+        let text = "[serial]
+baud_rate = 9600
+
+[[layout.panes]]
+id = 1
+dtr = \"on\"
+rts = true
+";
+        let loaded = load_settings_str(text).unwrap();
+        assert_eq!(loaded.serial.baud_rate, 9600);
+        assert!(!loaded.serial.dtr && !loaded.serial.rts);
     }
 
     #[test]
@@ -704,11 +592,27 @@ text_encoding = "utf-8"
     }
 
     #[test]
-    fn unknown_palette_falls_back_without_rejecting() {
+    fn palette_takes_any_theme_name_or_alias() {
+        let text = |name: &str| {
+            SAMPLE.replace(
+                "palette = \"classic-dark\"",
+                &format!("palette = \"{name}\""),
+            )
+        };
+        let loaded = load_settings_str(&text("classic-dark")).unwrap();
+        assert_eq!(loaded.terminal.palette, "dark");
+        let loaded = load_settings_str(&text("Tokyo-Night-Day")).unwrap();
+        assert_eq!(loaded.terminal.palette, "tokyo-night-light");
+        let loaded = load_settings_str(&text("light")).unwrap();
+        assert_eq!(loaded.terminal.palette, "light");
+    }
+
+    #[test]
+    fn unknown_palette_rejects_the_file_and_lists_the_names() {
         let text = SAMPLE.replace("palette = \"classic-dark\"", "palette = \"nope\"");
-        let loaded = load_settings_str(&text).unwrap();
-        assert_eq!(loaded.terminal.palette, "classic-dark");
-        assert_eq!(loaded.warnings.len(), 1);
+        let error = load_settings_str(&text).unwrap_err();
+        assert!(error.contains("terminal.palette `nope`"), "{error}");
+        assert!(error.contains("dark, light, gruvbox-dark"), "{error}");
     }
 
     #[test]
@@ -745,7 +649,6 @@ session = \"utf-8\"
         assert_eq!(loaded.encoding, SessionEncoding::Utf8);
         assert_eq!(loaded.newline, d.newline);
         assert_eq!(loaded.log, d.log);
-        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
@@ -770,7 +673,7 @@ parity = \"mark\"
     }
 
     #[test]
-    fn legacy_gui_keys_load_with_one_warning() {
+    fn legacy_gui_keys_load_silently() {
         let text = format!(
             "{}
 [ui]
@@ -793,31 +696,11 @@ font_fallbacks = [\"a\"]"
                 )
         );
         let loaded = load_settings_str(&text).unwrap();
-        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-        let warning = &loaded.warnings[0];
-        assert!(
-            warning.starts_with("Ignored unused settings: "),
-            "{warning}"
-        );
-        for key in [
-            "serial.reconnect",
-            "serial.reopen_on_start",
-            "terminal.font_family",
-            "terminal.font_size_px",
-            "terminal.font_fallbacks",
-            "ui",
-        ] {
-            assert!(warning.contains(key), "{warning}");
-        }
-        let expected = Settings {
-            warnings: loaded.warnings.clone(),
-            ..Settings::default()
-        };
-        assert_eq!(loaded, expected);
+        assert_eq!(loaded, Settings::default());
     }
 
     #[test]
-    fn the_old_layout_tables_are_ignored_and_named() {
+    fn the_old_layout_tables_are_ignored_silently() {
         let text = format!(
             "{}
 [layout.tree]
@@ -833,12 +716,6 @@ id = 2
         );
         let loaded = load_settings_str(&text).unwrap();
         assert_eq!(loaded.serial.baud_rate, 9600);
-        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-        assert!(
-            loaded.warnings[0].ends_with("layout"),
-            "{:?}",
-            loaded.warnings
-        );
     }
 
     #[test]

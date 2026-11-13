@@ -3,7 +3,10 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use rs_term_core::{AmbiguousWidth, DataBits, Flow, Parity, SessionEncoding, StopBits};
+use rs_term_core::{
+    canonical_theme_name, parse_switch, theme_list, AmbiguousWidth, DataBits, Flow, Parity,
+    SessionEncoding, StopBits,
+};
 
 use crate::keys::Prefix;
 
@@ -24,20 +27,32 @@ Options:
       --parity <none|odd|even>
       --stop <1|2>
       --flow <none|xonxoff|rtscts>
+      --dtr <on|off>          DTR level after opening (default off)
+      --rts <on|off>          RTS level after opening (default off; ignored with
+                              --flow rtscts, where the driver owns RTS)
   -e, --encoding <sjis|utf8>
       --log <PATH>            write a text log to this file from startup
       --prefix <ctrl-a>       prefix key (ctrl-LETTER, ctrl-\\, ctrl-]; default ctrl-a)
       --ambiguous-width <1|2|auto>
                               cells for ambiguous-width characters (default auto:
                               2 only on a conhost with a CJK code page)
+      --theme <NAME>          color theme (default dark), one of:
+                              dark, light, gruvbox-dark, gruvbox-light,
+                              tokyo-night, tokyo-night-storm, tokyo-night-light,
+                              catppuccin-mocha, catppuccin-latte, dracula, nord,
+                              solarized-dark, solarized-light, one-dark,
+                              one-light, kanagawa, kanagawa-lotus, rose-pine,
+                              rose-pine-dawn, vesper
   -h, --help
 
 Keys after the prefix:
   c connect   d disconnect   r reconnect   b break
   l log   L stop log   s send   f file
   u baud   e encoding   p paste
+  t theme (next)   T theme (previous)
   ? help   q quit   Esc cancel
   Press the prefix again to send its control byte.
+  Shift+Insert pastes the clipboard without the prefix; Ctrl+V is sent as 0x16.
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -48,10 +63,14 @@ pub struct Cli {
     pub parity: Option<Parity>,
     pub stop_bits: Option<StopBits>,
     pub flow: Option<Flow>,
+    pub dtr: Option<bool>,
+    pub rts: Option<bool>,
     pub encoding: Option<SessionEncoding>,
     pub log: Option<PathBuf>,
     pub prefix: Prefix,
     pub ambiguous_width: Option<AmbiguousWidth>,
+    /// The theme's own spelling.
+    pub theme: Option<&'static str>,
     pub help: bool,
 }
 
@@ -153,11 +172,14 @@ fn is_option(flag: &str) -> bool {
             | "--parity"
             | "--stop"
             | "--flow"
+            | "--dtr"
+            | "--rts"
             | "-e"
             | "--encoding"
             | "--log"
             | "--prefix"
             | "--ambiguous-width"
+            | "--theme"
     )
 }
 
@@ -209,6 +231,8 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
                 )
             })?)
         }
+        "--dtr" => cli.dtr = Some(switch(flag, value)?),
+        "--rts" => cli.rts = Some(switch(flag, value)?),
         "-e" | "--encoding" => cli.encoding = Some(parse_encoding(value)?),
         "--log" => cli.log = Some(PathBuf::from(value)),
         "--prefix" => cli.prefix = parse_prefix(value)?,
@@ -217,9 +241,18 @@ fn apply(cli: &mut Cli, flag: &str, value: &str) -> Result<(), String> {
                 format!("Ambiguous width `{}` must be 1, 2 or auto", lower(value))
             })?)
         }
+        "--theme" => {
+            cli.theme = Some(canonical_theme_name(value).ok_or_else(|| {
+                format!("Theme `{}` must be one of: {}", lower(value), theme_list())
+            })?)
+        }
         _ => return Err(format!("Unknown option: {flag}")),
     }
     Ok(())
+}
+
+fn switch(flag: &str, value: &str) -> Result<bool, String> {
+    parse_switch(value).ok_or_else(|| format!("{flag} `{}` must be on or off", lower(value)))
 }
 
 fn lower(text: &str) -> String {
@@ -281,6 +314,39 @@ mod tests {
         assert_eq!(cli.encoding, Some(SessionEncoding::ShiftJis));
         assert_eq!(cli.log.unwrap(), PathBuf::from("run.log"));
         assert_eq!(cli.prefix.ctrl, 'a');
+    }
+
+    #[test]
+    fn parses_the_dtr_and_rts_options() {
+        let cli = parse(["COM1"]).unwrap();
+        assert_eq!((cli.dtr, cli.rts), (None, None));
+        let cli = parse(["--dtr", "on", "--rts=OFF"]).unwrap();
+        assert_eq!((cli.dtr, cli.rts), (Some(true), Some(false)));
+        let error = parse(["--dtr", "high"]).unwrap_err();
+        assert!(error.contains("on or off"), "{error}");
+    }
+
+    #[test]
+    fn parses_the_theme_option() {
+        assert_eq!(parse(["COM1"]).unwrap().theme, None);
+        assert_eq!(parse(["--theme", "light"]).unwrap().theme, Some("light"));
+        assert_eq!(parse(["--theme=Classic-Dark"]).unwrap().theme, Some("dark"));
+        assert_eq!(
+            parse(["--theme", "tokyo-night-day"]).unwrap().theme,
+            Some("tokyo-night-light")
+        );
+        let error = parse(["--theme", "pink"]).unwrap_err();
+        assert!(
+            error.contains("`pink`") && error.contains("nord"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn help_lists_every_theme() {
+        for name in rs_term_core::theme_names() {
+            assert!(HELP.contains(name), "{name}");
+        }
     }
 
     #[test]
