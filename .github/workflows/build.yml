@@ -24,11 +24,32 @@ jobs:
       - uses: ./.github/actions/package-release
         with:
           target: x86_64-pc-windows-msvc
+      # The MSI built here is unsigned; only the release workflow signs.
+      - uses: ./.github/actions/build-msi
+        with:
+          exe: dist/rs-term.exe
+          out: dist/rs-term-x86_64-pc-windows-msvc.msi
       - uses: actions/upload-artifact@v4
         with:
           name: rs-term-x86_64-pc-windows-msvc
           path: dist/
           if-no-files-found: error
+      # Self-test of the signing path with an ephemeral certificate. The
+      # signed copies stay in RUNNER_TEMP and are not uploaded.
+      - name: Self-test signing with an ephemeral certificate
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'sign-test'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Copy-Item dist/rs-term.exe, dist/rs-term-x86_64-pc-windows-msvc.msi $work
+          .github/scripts/new-test-cert.ps1 -EnvFile $env:GITHUB_ENV
+          # The new variables are visible to the next step only.
+          "SIGN_TEST_DIR=$work" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign the test copies
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem $env:SIGN_TEST_DIR -File | ForEach-Object FullName
+          .github/scripts/sign.ps1 -Files $files -CertOut (Join-Path $env:SIGN_TEST_DIR 'test.cer')
 
   linux:
     name: x86_64-unknown-linux-gnu
