@@ -104,7 +104,7 @@ The default prefix is Ctrl+A (change it with `--prefix`). Press the prefix, then
 | `f` | File: send a file |
 | `u` | Baud: change the baud rate |
 | `e` | Encoding: change the encoding (`sjis` or `utf8`) |
-| `p` | Paste: paste the OS clipboard |
+| `p` | Paste: paste the OS clipboard (Shift+Insert does the same without the prefix) |
 | `t` | Theme: switch to the next theme (`T`: the previous one) |
 | `?` | Help: show the help overlay |
 | `q` | Quit |
@@ -117,7 +117,7 @@ Notes:
 - Scrolling: mouse wheel (3 lines per step) or PgUp / PgDn (a page). This moves rs-term's own scrollback.
   Pressing Enter while scrolled back jumps to the latest output (and sends the newline as usual); other keys and new output do not move the view.
 - Selection: drag with the mouse. The selection is copied with OSC 52, and also to the OS clipboard when it can be opened.
-- Paste: a bracketed paste from the host terminal is sent to the port as text; prefix then `p` pastes the OS clipboard.
+- Paste: a bracketed paste from the host terminal is sent to the port as text; prefix then `p`, or Shift+Insert, pastes the OS clipboard. Ctrl+V is not a paste key: it is sent to the port as `0x16`. After any paste the status line shows `Pasted N bytes`, the number of bytes queued for the port in the session encoding (including the newline conversion and, when the device enabled bracketed paste, its markers).
 - A log cannot be started while one is running; stop it first with `L`.
 
 ## Status line

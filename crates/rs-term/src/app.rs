@@ -327,7 +327,11 @@ impl App {
             return;
         }
         self.prefix_armed = false;
-        self.send_input(Input::Text(text));
+        let note = match self.session.paste(&text) {
+            Ok(bytes) => Message::info(pasted_text(bytes)),
+            Err(error) => Message::error(error.to_string()),
+        };
+        self.session.set_message(note);
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -341,6 +345,10 @@ impl App {
                 Action::Scroll { up, page } => self.scroll_help(up, page),
                 _ => {}
             }
+            return;
+        }
+        if is_shift_insert(&key) {
+            self.paste_clipboard();
             return;
         }
         if self.modal.is_some() {
@@ -538,7 +546,7 @@ impl App {
 
     fn paste_clipboard(&mut self) {
         match clipboard_text() {
-            Some(text) => self.send_input(Input::Text(text)),
+            Some(text) => self.on_paste(text),
             None => self
                 .session
                 .set_message(Message::error("Cannot read the clipboard")),
@@ -770,6 +778,24 @@ impl App {
     }
 }
 
+/// Shift+Insert pastes the OS clipboard on every platform. Ctrl+V stays a
+/// plain 0x16 for the device.
+fn is_shift_insert(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Insert
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+}
+
+fn pasted_text(bytes: usize) -> String {
+    if bytes == 1 {
+        "Pasted 1 byte".into()
+    } else {
+        format!("Pasted {bytes} bytes")
+    }
+}
+
 /// The startup messages as one: texts joined, colored by the most severe.
 fn combine_startup(messages: Vec<Message>) -> Option<Message> {
     let rank = |severity: Severity| match severity {
@@ -949,6 +975,42 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         (buffer[(0, 0)].bg, buffer[(0, 23)].bg)
+    }
+
+    #[test]
+    fn shift_insert_is_the_paste_key_and_ctrl_v_is_not() {
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        assert!(is_shift_insert(&key(KeyCode::Insert, KeyModifiers::SHIFT)));
+        assert!(!is_shift_insert(&key(KeyCode::Insert, KeyModifiers::NONE)));
+        assert!(!is_shift_insert(&key(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL
+        )));
+        assert_eq!(
+            crate::keys::classify(
+                &key(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                Prefix::default(),
+                Focus::Terminal
+            ),
+            Action::Input(Input::Key(KeyInput::Ctrl('v')))
+        );
+    }
+
+    #[test]
+    fn the_paste_message_counts_bytes() {
+        assert_eq!(pasted_text(0), "Pasted 0 bytes");
+        assert_eq!(pasted_text(1), "Pasted 1 byte");
+        assert_eq!(pasted_text(12), "Pasted 12 bytes");
+    }
+
+    #[test]
+    fn a_paste_without_a_port_is_an_error_not_a_count() {
+        let mut app = App::with_settings(Cli::default(), Settings::default(), None);
+        press_with(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        app.on_paste("abc".into());
+        let (severity, text) = app.status_view().message.unwrap();
+        assert_eq!(severity, Severity::Error);
+        assert!(!text.contains("Pasted"), "{text}");
     }
 
     #[test]

@@ -52,6 +52,7 @@ Keys after the prefix:
   t theme (next)   T theme (previous)
   ? help   q quit   Esc cancel
   Press the prefix again to send its control byte.
+  Shift+Insert pastes the clipboard without the prefix; Ctrl+V is sent as 0x16.
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

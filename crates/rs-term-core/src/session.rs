@@ -494,6 +494,14 @@ impl Session {
         }
     }
 
+    /// Send pasted text like `Input::Text` and report how many bytes were
+    /// queued for the port: the text in the session encoding, with the
+    /// transmit newline and the bracketed-paste markers when the screen
+    /// asked for them.
+    pub fn paste(&mut self, text: &str) -> Result<usize, SessionError> {
+        self.send_text(text)
+    }
+
     pub fn apply_input(&mut self, input: Input) -> Result<(), SessionError> {
         match input {
             Input::Key(KeyInput::Char(ch)) => {
@@ -523,7 +531,7 @@ impl Session {
                 let bytes = key_bytes(&key, self.screen.app_cursor())?;
                 self.queue_bytes(bytes)
             }
-            Input::Text(text) => self.send_text(&text),
+            Input::Text(text) => self.send_text(&text).map(|_| ()),
             Input::Bytes(bytes) => self.queue_bytes(bytes),
             Input::Break { hold } => self.send_command(Command::Break { hold }),
             Input::Cancel => {
@@ -681,7 +689,7 @@ impl Session {
         self.screen.selected_text()
     }
 
-    fn send_text(&mut self, text: &str) -> Result<(), SessionError> {
+    fn send_text(&mut self, text: &str) -> Result<usize, SessionError> {
         let mut chunks: Vec<Vec<u8>> = Vec::new();
         let mut echo: Vec<Echo> = Vec::new();
         if self.screen.bracketed_paste() {
@@ -707,7 +715,7 @@ impl Session {
         if self.screen.bracketed_paste() {
             chunks.push(b"\x1b[201~".to_vec());
         }
-        self.queue_chunks(chunks)?;
+        let queued = self.queue_chunks(chunks)?;
         if self.local_echo {
             for item in echo {
                 match item {
@@ -716,7 +724,7 @@ impl Session {
                 }
             }
         }
-        Ok(())
+        Ok(queued)
     }
 
     fn queue_encoded(&mut self, text: &str, bytes: &[u8]) -> Result<(), SessionError> {
@@ -730,12 +738,12 @@ impl Session {
     fn queue_bytes(&mut self, bytes: Vec<u8>) -> Result<(), SessionError> {
         let mut chunks = Vec::new();
         push_chunks(&mut chunks, bytes);
-        self.queue_chunks(chunks)
+        self.queue_chunks(chunks).map(|_| ())
     }
 
     /// One `Input` is one command, so it is queued whole or not at all
     /// (review N4).
-    fn queue_chunks(&mut self, chunks: Vec<Vec<u8>>) -> Result<(), SessionError> {
+    fn queue_chunks(&mut self, chunks: Vec<Vec<u8>>) -> Result<usize, SessionError> {
         if !matches!(self.link, Link::Open { .. }) {
             return Err(SessionError::NotOpen);
         }
@@ -747,7 +755,9 @@ impl Session {
             });
         }
         let generation = self.generation.load(Ordering::Relaxed);
-        self.send_command(Command::Write { generation, bytes })
+        let queued = bytes.len();
+        self.send_command(Command::Write { generation, bytes })?;
+        Ok(queued)
     }
 
     fn send_command(&mut self, command: Command) -> Result<(), SessionError> {
@@ -1462,6 +1472,27 @@ mod tests {
         session.apply_input(Input::Text(text)).unwrap();
         let written = wait_written(&state, 300 * 1024);
         assert_eq!(written.len(), 300 * 1024);
+    }
+
+    #[test]
+    fn a_paste_reports_the_bytes_queued_in_the_session_encoding() {
+        let (state, open) = open_shared(empty_state());
+        let mut session = Session::new(SessionConfig {
+            encoding: SessionEncoding::ShiftJis,
+            newline: Newline {
+                receive: ReceiveNewline::Cr,
+                transmit: TransmitNewline::Cr,
+            },
+            ..SessionConfig::default()
+        });
+        let _rx = session.connect_with(SerialParams::default(), open).unwrap();
+        // Shift_JIS takes two bytes per kana and the transmit newline is one CR.
+        let text = "ab
+cd\u{3042}";
+        let queued = session.paste(text).unwrap();
+        assert_eq!(queued, 2 + 1 + 2 + 2);
+        assert_eq!(wait_written(&state, queued).len(), queued);
+        assert!(session.paste("").unwrap() == 0);
     }
 
     #[test]
