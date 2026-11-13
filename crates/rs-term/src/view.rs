@@ -23,7 +23,7 @@ pub const HELP: &str = "Prefix key (default Ctrl+A), then:
   s  send (a string)  f  file (send a file)
   u  baud             e  encoding
   p  paste (clipboard); Shift+Insert does it without the prefix
-  t  next theme       T  previous theme
+  t  theme (pick one)
   ?  help             q  quit
   Prefix again        send the prefix's control byte
   Esc                 cancel

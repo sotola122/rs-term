@@ -458,21 +458,6 @@ pub fn default_palette() -> TerminalPalette {
     build(&THEMES[0])
 }
 
-/// The theme after (or before) `name` in the cycle. An unknown name counts as
-/// the default.
-pub fn next_theme(name: &str, forward: bool) -> &'static str {
-    let at = find(name)
-        .and_then(|found| THEMES.iter().position(|spec| spec.name == found.name))
-        .unwrap_or(0);
-    let count = THEMES.len();
-    let next = if forward {
-        (at + 1) % count
-    } else {
-        (at + count - 1) % count
-    };
-    THEMES[next].name
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,27 +517,6 @@ mod tests {
         assert_eq!(dark.foreground, rgb(0xD4D4D4));
         assert_eq!(dark.ui.status_bg, rgb(0x202020));
         assert_eq!(dark.ui.error, rgb(0xFF6060));
-    }
-
-    #[test]
-    fn next_theme_cycles_both_ways_through_every_theme() {
-        let first = theme_names().next().unwrap();
-        let mut name = first;
-        let mut seen = 0;
-        loop {
-            name = next_theme(name, true);
-            seen += 1;
-            assert_eq!(
-                next_theme(name, false),
-                THEMES[(seen + THEMES.len() - 1) % THEMES.len()].name
-            );
-            if name == first {
-                break;
-            }
-        }
-        assert_eq!(seen, THEMES.len());
-        assert_eq!(next_theme("dark", false), THEMES[THEMES.len() - 1].name);
-        assert_eq!(next_theme("nope", true), THEMES[1].name);
     }
 
     #[test]

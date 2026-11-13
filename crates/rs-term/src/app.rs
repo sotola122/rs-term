@@ -10,11 +10,11 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use rs_term_core::{
-    default_palette, list_ports, load_settings_file, log_dir_from_env, next_theme, palette_by_name,
-    settings_path_from_env, suggested_log_path, viewport_to_line, DataBits, EventRx, Flow, Input,
-    IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message, OpenError,
-    OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig, SessionError, Settings,
-    Severity, StopBits, TerminalPalette, MAX_PENDING,
+    default_palette, list_ports, load_settings_file, log_dir_from_env, palette_by_name,
+    settings_path_from_env, suggested_log_path, theme_names, viewport_to_line, DataBits, EventRx,
+    Flow, Input, IoEvent, KeyInput, Link, LogCommand, LogEncoding, LogSession, LogTarget, Message,
+    OpenError, OpenedPort, Parity, ScreenConfig, SerialParams, Session, SessionConfig,
+    SessionError, Settings, Severity, StopBits, TerminalPalette, MAX_PENDING,
 };
 
 use crate::cli::{self, Cli};
@@ -34,6 +34,7 @@ pub enum Modal {
     LogPath,
     Baud,
     Encoding,
+    Theme,
 }
 
 pub struct ModalBody {
@@ -60,6 +61,8 @@ pub struct App {
     ports: Vec<String>,
     port_note: Option<String>,
     picker_index: usize,
+    /// The theme to restore when the theme picker is cancelled.
+    theme_before: Option<&'static str>,
     quit: bool,
     size: (u16, u16),
     last_tick: Instant,
@@ -114,6 +117,7 @@ impl App {
             ports: Vec::new(),
             port_note: None,
             picker_index: 0,
+            theme_before: None,
             quit: false,
             size: (80, 24),
             last_tick: Instant::now(),
@@ -171,16 +175,29 @@ impl App {
         };
     }
 
-    fn cycle_theme(&mut self, forward: bool) {
-        let name = next_theme(self.palette.name, forward);
-        self.set_theme(name);
+    /// Open the theme list with the current theme selected.
+    fn open_theme_picker(&mut self) {
+        self.theme_before = Some(self.palette.name);
+        self.picker_index = theme_names()
+            .position(|name| name == self.palette.name)
+            .unwrap_or(0);
+        self.open_text(Modal::Theme, String::new());
     }
 
-    fn set_theme(&mut self, name: &str) {
-        if let Some(palette) = palette_by_name(name) {
+    /// Move the theme selection and preview that palette.
+    fn move_theme(&mut self, delta: isize) {
+        let count = theme_names().count();
+        let next = (self.picker_index as isize + delta).clamp(0, count as isize - 1) as usize;
+        self.picker_index = next;
+        if let Some(palette) = theme_names().nth(next).and_then(palette_by_name) {
             self.palette = palette;
-            self.session
-                .set_message(Message::info(format!("Theme: {}", self.palette.name)));
+        }
+    }
+
+    /// Put back the theme that was active when the picker opened.
+    fn restore_theme(&mut self) {
+        if let Some(palette) = self.theme_before.take().and_then(palette_by_name) {
+            self.palette = palette;
         }
     }
 
@@ -197,7 +214,6 @@ impl App {
         StatusView {
             colors: self.palette.ui,
             prefix: self.prefix_armed,
-            prefix_label: self.prefix.label(),
             port: if params.path.is_empty() {
                 "no port".into()
             } else {
@@ -270,6 +286,14 @@ impl App {
                 lines.push((format!("> {}█", self.input), false));
                 "Encoding"
             }
+            Modal::Theme => {
+                lines.push(("Up/Down preview  Enter keep  Esc cancel".into(), false));
+                pinned = Some(lines.len());
+                for (index, name) in theme_names().enumerate() {
+                    lines.push((name.to_string(), index == self.picker_index));
+                }
+                "Theme"
+            }
         };
         let pinned = pinned.unwrap_or(lines.len());
         Some(ModalBody {
@@ -315,6 +339,9 @@ impl App {
 
     pub fn on_paste(&mut self, text: String) {
         if self.help {
+            return;
+        }
+        if self.modal == Some(Modal::Theme) {
             return;
         }
         if self.modal.is_some() {
@@ -428,6 +455,19 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let picker = self.modal == Some(Modal::Picker);
+        if self.modal == Some(Modal::Theme) {
+            match key.code {
+                KeyCode::Esc => {
+                    self.restore_theme();
+                    self.close_modal();
+                }
+                KeyCode::Enter => self.confirm_modal(),
+                KeyCode::Up => self.move_theme(-1),
+                KeyCode::Down => self.move_theme(1),
+                _ => {}
+            }
+            return;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.modal = None;
@@ -482,7 +522,7 @@ impl App {
             }
             Command::Quit => self.quit = true,
             Command::Paste => self.paste_clipboard(),
-            Command::Theme { forward } => self.cycle_theme(forward),
+            Command::Theme => self.open_theme_picker(),
             Command::Cancel => {
                 self.prefix_armed = false;
                 self.help = false;
@@ -611,6 +651,12 @@ impl App {
                 }
                 Err(error) => self.modal_error = Some(error),
             },
+            Modal::Theme => {
+                self.theme_before = None;
+                self.close_modal();
+                self.session
+                    .set_message(Message::info(format!("Theme: {}", self.palette.name)));
+            }
             Modal::Encoding => match cli::parse_encoding(&input) {
                 Ok(encoding) => {
                     self.close_modal();
@@ -1013,36 +1059,85 @@ mod tests {
         assert!(!text.contains("Pasted"), "{text}");
     }
 
-    #[test]
-    fn prefix_t_cycles_the_theme_and_redraws_in_its_colors() {
-        use ratatui::style::Color;
+    /// An app with no port picker open, the theme picker opened by `Ctrl+A t`.
+    fn theme_picker_app() -> App {
         let mut app = App::with_settings(Cli::default(), Settings::default(), None);
-        assert_eq!(app.palette().name, "dark");
-        // Close the port picker that opens without a port.
         press_with(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         assert!(app.modal.is_none());
-        let (terminal_bg, status_bg) = drawn_colors(&app);
-        assert_eq!(terminal_bg, Color::Rgb(0, 0, 0));
-
         press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
         press_with(&mut app, KeyCode::Char('t'), KeyModifiers::NONE);
+        app
+    }
+
+    #[test]
+    fn prefix_t_opens_the_theme_picker_with_the_current_theme_selected() {
+        let mut settings = Settings::default();
+        settings.terminal.palette = "nord".into();
+        let mut app = App::with_settings(Cli::default(), settings, None);
+        press_with(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        press_with(&mut app, KeyCode::Char('t'), KeyModifiers::NONE);
+        assert_eq!(app.modal, Some(Modal::Theme));
+        let body = app.modal_body().unwrap();
+        assert_eq!(body.title, "Theme");
+        let selected: Vec<_> = body.lines.iter().filter(|(_, sel)| *sel).collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0, "nord");
+        let names = body.lines.iter().skip(body.pinned).count();
+        assert_eq!(names, theme_names().count());
+        // Typing is ignored; no message is set by opening.
+        press(&mut app, KeyCode::Char('x'));
+        assert!(app.input.is_empty());
+        assert_eq!(app.palette().name, "nord");
+        // Opening sets no message.
+        assert!(app.session.note().is_none());
+    }
+
+    #[test]
+    fn down_previews_the_next_palette_and_redraws_in_its_colors() {
+        use ratatui::style::Color;
+        let mut app = theme_picker_app();
+        assert_eq!(app.palette().name, "dark");
+        let (terminal_bg, status_bg) = drawn_colors(&app);
+        assert_eq!(terminal_bg, Color::Rgb(0, 0, 0));
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.palette().name, "light");
-        let (_, message) = app.status_view().message.unwrap();
-        assert_eq!(message, "Theme: light");
+        assert!(app.session.note().is_none(), "a preview sets no message");
+        assert_eq!(app.modal, Some(Modal::Theme));
         let (light_terminal, light_status) = drawn_colors(&app);
         assert_eq!(light_terminal, Color::Rgb(0xFF, 0xFF, 0xFF));
         assert_ne!(light_status, status_bg);
-
-        // T goes back; the cycle is closed (the last theme wraps to the first).
-        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
-        press_with(&mut app, KeyCode::Char('T'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Up);
         assert_eq!(app.palette().name, "dark");
-        press_with(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
-        press_with(&mut app, KeyCode::Char('T'), KeyModifiers::SHIFT);
+        press(&mut app, KeyCode::Up);
         assert_eq!(
             app.palette().name,
-            rs_term_core::theme_names().last().unwrap()
+            "dark",
+            "the selection clamps at the top"
         );
+    }
+
+    #[test]
+    fn enter_keeps_the_previewed_theme_and_sets_a_message() {
+        let mut app = theme_picker_app();
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+        assert_eq!(app.palette().name, "light");
+        let (severity, text) = app.status_view().message.unwrap();
+        assert_eq!((severity, text.as_str()), (Severity::Info, "Theme: light"));
+    }
+
+    #[test]
+    fn esc_restores_the_original_theme_without_a_message() {
+        let mut app = theme_picker_app();
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_ne!(app.palette().name, "dark");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+        assert_eq!(app.palette().name, "dark");
+        assert!(app.session.note().is_none());
     }
 
     #[test]
