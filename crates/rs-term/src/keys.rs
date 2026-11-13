@@ -20,11 +20,6 @@ impl Prefix {
             .unwrap_or(0)
     }
 
-    /// The prefix as shown to the user: "Ctrl+A", "Ctrl+]".
-    pub fn label(self) -> String {
-        format!("Ctrl+{}", self.ctrl.to_ascii_uppercase())
-    }
-
     /// Some terminals report Ctrl+\ and Ctrl+] as Ctrl+4 and Ctrl+5.
     fn digit_alias(self) -> Option<char> {
         match self.ctrl {
@@ -63,10 +58,8 @@ pub enum Command {
     Help,
     Quit,
     Paste,
-    /// The next theme, or the previous one.
-    Theme {
-        forward: bool,
-    },
+    /// Open the theme picker.
+    Theme,
     Cancel,
 }
 
@@ -166,11 +159,7 @@ fn prefix_action(key: &KeyEvent, prefix: Prefix) -> Action {
         KeyCode::Char('u') => Command::Baud,
         KeyCode::Char('e') => Command::Encoding,
         KeyCode::Char('p') => Command::Paste,
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            Command::Theme { forward: false }
-        }
-        KeyCode::Char('T') => Command::Theme { forward: false },
-        KeyCode::Char('t') => Command::Theme { forward: true },
+        KeyCode::Char('t') => Command::Theme,
         KeyCode::Char('?') => Command::Help,
         KeyCode::Char('q') => Command::Quit,
         _ => return Action::Ignore,

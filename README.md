@@ -14,7 +14,7 @@ One process is one serial session. There are no built-in panes or tabs: run seve
 - Own scrollback (10000 lines by default), scrolled with the mouse wheel or PgUp / PgDn. The host terminal's scrollback is not used.
 - Mouse selection copies through OSC 52 and, when available, the OS clipboard.
 - Bracketed paste.
-- Color themes (dark, light, Gruvbox, Tokyo Night, Catppuccin, Dracula, Nord, Solarized and more), switched at run time.
+- Color themes (dark, light, Gruvbox, Tokyo Night, Catppuccin, Dracula, Nord, Solarized and more), picked from a list at run time.
 - Text logging with size-based rotation.
 - Send a string or a file.
 - Send a break.
@@ -139,7 +139,7 @@ The default prefix is Ctrl+A (change it with `--prefix`). Press the prefix, then
 | `u` | Baud: change the baud rate |
 | `e` | Encoding: change the encoding (`sjis` or `utf8`) |
 | `p` | Paste: paste the OS clipboard (Shift+Insert does the same without the prefix) |
-| `t` | Theme: switch to the next theme (`T`: the previous one) |
+| `t` | Theme: open the theme list (Up/Down preview a theme, Enter keeps it, Esc cancels) |
 | `?` | Help: show the help overlay |
 | `q` | Quit |
 | `Esc` | Cancel: leave the prefix state |
@@ -160,14 +160,16 @@ The bottom row shows, from left to right:
 
 | Item | Meaning |
 | --- | --- |
-| `PREFIX` | Shown only while the prefix key is armed and waiting for the next key |
+| link symbol | One character, colored by the link state: `*` connected (green), `~` connecting (yellow), `!` connection lost (red), `-` disconnected (gray) |
+| `PREFIX` | Shown right after the link symbol, only while the prefix key is armed and waiting for the next key |
 | port | The port path, or `no port` (no port selected) |
 | frame | Baud rate and framing, e.g. `115200 8N1`; `XON/XOFF` or `RTS/CTS` is appended when flow control is on |
 | encoding | `Shift_JIS` or `UTF-8` |
-| link state | `disconnected`, `connecting` (opening), `connected`, `lost` (connection lost) |
-| log state | `LOG off`, `LOG on` (text log running), `LOG failed`, `LOG bin` (binary log running) |
-| `RX n` / `TX n` | Bytes received / sent |
-| right side | Right-aligned. While the prefix is armed it lists the commands (`c connect  d disconnect  ... Esc cancel`), or only their keys (`c d r b l L s f u e p t ? q Esc`) when the full list does not fit. If even the keys do not fit beside the left items (for example at 80 columns), the left side shrinks to `PREFIX` and the list gets the rest of the row. Otherwise it is the latest message: info is plain gray, warnings are prefixed `Warning:` (yellow), errors are prefixed `Error:` (red). With no message it shows the hint `<prefix> ? help`, e.g. `Ctrl+A ? help`. Text that does not fit is cut with `...`, or dropped if there is no room. The left items are never cut |
+| log state | Right-aligned: `LOG off`, `LOG on` (text log running), `LOG failed`, `LOG bin` (binary log running) |
+| `RX n` / `TX n` | Right-aligned: bytes received / sent |
+| message | Just left of the log state and the counters. Info is plain text and disappears after about 3 seconds; warnings are prefixed `WARN ` (yellow) and errors `ERR ` (red) and stay until replaced. Text that does not fit is cut with `...`, or dropped if there is no room |
+
+The link symbol, port, frame and encoding are never cut. If they and the log state and counters do not fit together, the log state and counters are dropped. While the prefix is armed, the right side lists the commands (`c connect  d disconnect  ... Esc cancel`) instead, or only their keys (`c d r b l L s f u e p t ? q Esc`) when the full list does not fit. If even the keys do not fit beside the left items, the left side shrinks to the link symbol and `PREFIX` and the list gets the rest of the row.
 
 ## Configuration
 
@@ -234,7 +236,7 @@ Choose one with `--theme <NAME>` or `palette` under `[terminal]` in `settings.to
 
 `dark, light, gruvbox-dark, gruvbox-light, tokyo-night, tokyo-night-storm, tokyo-night-light, catppuccin-mocha, catppuccin-latte, dracula, nord, solarized-dark, solarized-light, one-dark, one-light, kanagawa, kanagawa-lotus, rose-pine, rose-pine-dawn, vesper`
 
-`classic-dark` is accepted as another spelling of `dark`. The Gruvbox, Catppuccin, Solarized and Tokyo Night themes also answer to `gruvbox`, `catppuccin`, `solarized`, `tokyo-night-day` and so on. Press the prefix, then `t` to switch to the next theme in this order (`T` for the previous one); the status line shows `Theme: <name>`. The switch is not saved: the next start uses the option or the file again.
+`classic-dark` is accepted as another spelling of `dark`. The Gruvbox, Catppuccin, Solarized and Tokyo Night themes also answer to `gruvbox`, `catppuccin`, `solarized`, `tokyo-night-day` and so on. Press the prefix, then `t` to open a list of the themes with the current one selected. Up and Down move the selection and show that theme at once; Enter keeps it (the status line shows `Theme: <name>` for a few seconds) and Esc goes back to the theme you had. The choice is not saved: the next start uses the option or the file again.
 
 ## Logs
 

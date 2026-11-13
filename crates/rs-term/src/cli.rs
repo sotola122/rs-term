@@ -49,7 +49,7 @@ Keys after the prefix:
   c connect   d disconnect   r reconnect   b break
   l log   L stop log   s send   f file
   u baud   e encoding   p paste
-  t theme (next)   T theme (previous)
+  t theme (pick from a list)
   ? help   q quit   Esc cancel
   Press the prefix again to send its control byte.
   Shift+Insert pastes the clipboard without the prefix; Ctrl+V is sent as 0x16.

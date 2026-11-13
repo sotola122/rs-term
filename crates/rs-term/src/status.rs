@@ -1,5 +1,6 @@
-//! One status line: port, frame, encoding, link, log, RX/TX, and a right-hand
-//! hint, message or command list.
+//! One status line: link symbol, port, frame and encoding on the left; log,
+//! RX/TX and a message on the right, or the command list while the prefix is
+//! armed.
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -15,7 +16,7 @@ pub const PREFIX_COMMANDS: &str = "c connect  d disconnect  r reconnect  b break
 /// The keys alone, for when the full list does not fit.
 pub const PREFIX_KEYS: &str = "c d r b l L s f u e p t ? q Esc";
 
-/// The link as the status line shows it: a word and its color.
+/// The link as the status line shows it: one ASCII symbol and its color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkState {
     Disconnected,
@@ -25,12 +26,12 @@ pub enum LinkState {
 }
 
 impl LinkState {
-    fn word(self) -> &'static str {
+    fn symbol(self) -> &'static str {
         match self {
-            Self::Disconnected => "disconnected",
-            Self::Opening => "connecting",
-            Self::Open => "connected",
-            Self::Lost => "lost",
+            Self::Disconnected => "-",
+            Self::Opening => "~",
+            Self::Open => "*",
+            Self::Lost => "!",
         }
     }
 
@@ -52,8 +53,6 @@ fn color(rgb: Rgb) -> Color {
 pub struct StatusView {
     pub colors: UiColors,
     pub prefix: bool,
-    /// The configured prefix, e.g. "Ctrl+A", for the idle hint.
-    pub prefix_label: String,
     pub port: String,
     pub frame: String,
     pub encoding: String,
@@ -64,90 +63,109 @@ pub struct StatusView {
     pub message: Option<(Severity, String)>,
 }
 
-/// The status line for a row `width` cells wide. The left items are whole.
-/// The right side is the command list while the prefix is armed, else the
-/// message, else the `<prefix> ? help` hint. It sits at the right edge. If
-/// the text does not fit it is cut with `...` by display width, and if even
-/// `...` does not fit it is dropped.
+const GAP: usize = 2;
+
+/// `text` cut to `room` cells with `...`, never splitting a wide character,
+/// or `None` if even the dots do not fit.
+fn cut(text: &str, room: usize) -> Option<String> {
+    if Span::raw(text).width() <= room {
+        return Some(text.to_string());
+    }
+    let budget = room.checked_sub(ELLIPSIS.len())?;
+    let mut shown = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = Span::raw(ch.to_string()).width();
+        if used + w > budget {
+            break;
+        }
+        shown.push(ch);
+        used += w;
+    }
+    shown.push_str(ELLIPSIS);
+    Some(shown)
+}
+
+/// The status line for a row `width` cells wide. The left items (link
+/// symbol, port, frame, encoding) are whole. The state items (`LOG`, `RX`,
+/// `TX`) sit at the right edge and are dropped if they do not fit beside the
+/// left items. A message goes just left of them in the room that remains,
+/// cut with `...` by display width, or dropped if even `...` does not fit.
 ///
-/// While the prefix is armed the commands come first. The order is: the
-/// normal left items with the full list, with the keys alone, then only
-/// `PREFIX` with the full list, with the keys alone, and last the keys cut
-/// with `...`. Without the prefix the left items are never cut.
+/// The link symbol is always the first cell. While the prefix is armed the
+/// symbol is followed by `PREFIX`, and the commands come first; the state
+/// items and message are not shown. The order is: the normal left items with
+/// the full list, with the keys alone, then only `* PREFIX` with the full
+/// list, with the keys alone, and last the keys cut with `...`.
 pub fn status_line(view: &StatusView, width: u16) -> Line<'static> {
     let ui = &view.colors;
     let normal = Style::default()
         .fg(color(ui.status_fg))
         .bg(color(ui.status_bg));
     let warn = color(ui.warn);
-    let mut spans = Vec::new();
+    let width = width as usize;
+    let mut spans = vec![Span::styled(
+        view.link.symbol(),
+        normal.fg(view.link.color(ui)),
+    )];
     if view.prefix {
-        spans.push(Span::styled("PREFIX  ", normal.fg(warn)));
+        spans.push(Span::styled(" PREFIX  ", normal.fg(warn)));
+    } else {
+        spans.push(Span::styled(" ", normal));
     }
     spans.push(Span::styled(
-        format!("{}  {}  {}  ", view.port, view.frame, view.encoding),
+        format!("{}  {}  {}", view.port, view.frame, view.encoding),
         normal,
     ));
-    spans.push(Span::styled(
-        format!("{}  ", view.link.word()),
-        normal.fg(view.link.color(ui)),
-    ));
-    spans.push(Span::styled(
-        format!("{}  RX {}  TX {}", view.log, view.rx, view.tx),
-        normal,
-    ));
-    let dim = color(ui.muted);
     let mut left: usize = spans.iter().map(Span::width).sum();
-    const GAP: usize = 2;
-    let (text, color) = if view.prefix {
-        let width = width as usize;
+    if view.prefix {
         let fits = |left: usize, list: &str| left + GAP + Span::raw(list).width() <= width;
         let mut list = PREFIX_COMMANDS;
         if !fits(left, list) {
             list = PREFIX_KEYS;
             if !fits(left, list) {
-                // Give the whole row to the list: keep only the PREFIX tag.
-                spans.truncate(1);
-                spans[0] = Span::styled("PREFIX", normal.fg(warn));
-                left = spans[0].width();
+                // Give the whole row to the list: keep the symbol and PREFIX.
+                spans.truncate(2);
+                spans[1] = Span::styled(" PREFIX", normal.fg(warn));
+                left = spans.iter().map(Span::width).sum();
                 if fits(left, PREFIX_COMMANDS) {
                     list = PREFIX_COMMANDS;
                 }
             }
         }
-        (list.to_string(), normal.fg)
-    } else {
-        match &view.message {
-            Some((severity, message)) => match severity {
-                Severity::Error => (format!("Error: {message}"), Some(color(ui.error))),
-                Severity::Warn => (format!("Warning: {message}"), Some(warn)),
-                Severity::Info => (message.clone(), normal.fg),
-            },
-            None => (format!("{} ? help", view.prefix_label), Some(dim)),
+        let room = width.saturating_sub(left);
+        if let Some(shown) = cut(list, room.saturating_sub(GAP)).filter(|_| room >= GAP) {
+            let pad = room - Span::raw(shown.as_str()).width();
+            spans.push(Span::styled(" ".repeat(pad), normal));
+            spans.push(Span::styled(shown, normal));
         }
-    };
-    let style = color.map_or(normal, |color| normal.fg(color));
-    let room = (width as usize).saturating_sub(left);
-    let full = Span::raw(text.as_str()).width();
-    if room >= GAP + full {
-        spans.push(Span::styled(" ".repeat(room - full), normal));
-        spans.push(Span::styled(text, style));
-    } else if room >= GAP + ELLIPSIS.len() {
-        let budget = room - GAP - ELLIPSIS.len();
-        let mut shown = String::new();
-        let mut used = 0;
-        for ch in text.chars() {
-            let w = Span::raw(ch.to_string()).width();
-            if used + w > budget {
-                break;
-            }
-            shown.push(ch);
-            used += w;
-        }
-        shown.push_str(ELLIPSIS);
-        spans.push(Span::styled(" ".repeat(GAP), normal));
-        spans.push(Span::styled(shown, style));
+        return Line::from(spans);
     }
+    let state = format!("{}  RX {}  TX {}", view.log, view.rx, view.tx);
+    let state_w = Span::raw(state.as_str()).width();
+    if left + GAP + state_w > width {
+        return Line::from(spans);
+    }
+    let mut used = left + state_w;
+    let mut shown = None;
+    if let Some((severity, text)) = &view.message {
+        let (text, fg) = match severity {
+            Severity::Error => (format!("ERR {text}"), Some(color(ui.error))),
+            Severity::Warn => (format!("WARN {text}"), Some(warn)),
+            Severity::Info => (text.clone(), None),
+        };
+        let room = (width - left - state_w).saturating_sub(2 * GAP);
+        if let Some(text) = cut(&text, room) {
+            used += GAP + Span::raw(text.as_str()).width();
+            shown = Some(Span::styled(text, fg.map_or(normal, |fg| normal.fg(fg))));
+        }
+    }
+    spans.push(Span::styled(" ".repeat(width - used), normal));
+    if let Some(message) = shown {
+        spans.push(message);
+        spans.push(Span::styled(" ".repeat(GAP), normal));
+    }
+    spans.push(Span::styled(state, normal));
     Line::from(spans)
 }
 
@@ -209,7 +227,6 @@ mod tests {
         StatusView {
             colors: default_palette().ui,
             prefix: false,
-            prefix_label: "Ctrl+A".into(),
             port: "/dev/ttyUSB0".into(),
             frame: "9600 8N1".into(),
             encoding: "Shift_JIS".into(),
@@ -238,131 +255,174 @@ mod tests {
         Line::from(text).width()
     }
 
-    const LEFT: &str = "/dev/ttyUSB0  9600 8N1  Shift_JIS  connected  LOG on  RX 12  TX 3";
+    const LEFT: &str = "* /dev/ttyUSB0  9600 8N1  Shift_JIS";
+    const ARMED: &str = "* PREFIX  /dev/ttyUSB0  9600 8N1  Shift_JIS";
+    const STATE: &str = "LOG on  RX 12  TX 3";
 
-    #[test]
-    fn status_line_shows_port_frame_encoding_link_log_and_counts() {
-        let row = render(&sample(Some((Severity::Error, "port busy"))), 120);
-        for needle in [
-            "/dev/ttyUSB0",
-            "9600 8N1",
-            "Shift_JIS",
-            "connected",
-            "LOG on",
-            "RX 12",
-            "TX 3",
-            "Error: port busy",
-        ] {
-            assert!(row.contains(needle), "missing {needle} in {row:?}");
-        }
+    /// The row for `message` (already formatted, may be empty) at `width`.
+    fn expected(message: &str, width: usize) -> String {
+        let right = if message.is_empty() {
+            STATE.to_string()
+        } else {
+            format!("{message}  {STATE}")
+        };
+        let pad = " ".repeat(width - cells(LEFT) - cells(&right));
+        format!("{LEFT}{pad}{right}")
     }
 
     #[test]
-    fn the_hint_is_right_aligned_at_80_and_120() {
+    fn the_idle_row_has_the_left_items_and_the_state_at_the_right_edge() {
+        assert_eq!((cells(LEFT), cells(STATE)), (35, 19));
         for width in [80u16, 120] {
             let row = render(&sample(None), width);
-            assert!(row.starts_with(LEFT), "{row:?}");
-            assert!(row.ends_with("Ctrl+A ? help"), "{row:?}");
-            assert_eq!(cells(&row), width as usize, "{row:?}");
+            assert_eq!(row, expected("", width as usize));
+            assert!(!row.contains("help"), "{row:?}");
         }
     }
 
     #[test]
-    fn the_hint_uses_the_configured_prefix() {
-        let mut view = sample(None);
-        view.prefix_label = "Ctrl+]".into();
-        let row = render(&view, 120);
-        assert!(row.ends_with("Ctrl+] ? help"), "{row:?}");
+    fn messages_sit_left_of_the_state_with_their_severity_tag() {
+        for (message, shown) in [
+            (Some((Severity::Error, "port busy")), "ERR port busy"),
+            (Some((Severity::Warn, "careful")), "WARN careful"),
+            (Some((Severity::Info, "Theme: nord")), "Theme: nord"),
+        ] {
+            for width in [80u16, 120] {
+                let row = render(&sample(message), width);
+                assert_eq!(row, expected(shown, width as usize), "{row:?}");
+                assert_eq!(cells(&row), width as usize);
+            }
+        }
     }
 
     #[test]
-    fn the_hint_is_dropped_at_40_and_the_left_stays_whole() {
-        let row = render(&sample(None), 40);
-        assert!(!row.contains("help"), "{row:?}");
-        assert!(!row.contains("..."), "{row:?}");
-        assert!(row.starts_with(&LEFT[..40]), "{row:?}");
-        assert!(cells(&row) <= 40);
-        // Exactly the left width leaves no room for the hint either.
-        let row = render(&sample(None), cells(LEFT) as u16);
-        assert_eq!(row, LEFT);
+    fn a_long_message_is_cut_with_three_dots() {
+        let view = sample(Some((
+            Severity::Error,
+            "Port is busy (opened by another process)",
+        )));
+        // 80 - 35 - 19 - 4 = 22 cells: 19 for text and 3 for the dots.
+        let row = render(&view, 80);
+        assert_eq!(row, expected("ERR Port is busy (o...", 80));
+        // Exactly 3 cells (the dots alone) still shows them.
+        let width = 35 + 19 + 4 + 3;
+        let row = render(&view, width);
+        assert_eq!(row, expected("...", width as usize));
     }
 
     #[test]
-    fn a_message_wins_over_the_hint() {
-        let row = render(
-            &sample(Some((Severity::Info, "Baud rate set to 9600"))),
-            120,
+    fn the_message_is_dropped_when_not_even_the_dots_fit() {
+        let view = sample(Some((Severity::Warn, "broken")));
+        let width = 35 + 19 + 4 + 2;
+        let row = render(&view, width);
+        assert_eq!(row, expected("", width as usize));
+    }
+
+    #[test]
+    fn the_state_is_dropped_when_it_does_not_fit_and_the_left_stays_whole() {
+        let view = sample(Some((Severity::Error, "port busy")));
+        assert_eq!(
+            render(&view, 35 + 2 + 19 - 1),
+            LEFT.to_string() + &" ".repeat(19 + 2 - 1)
         );
-        assert!(row.ends_with("Baud rate set to 9600"), "{row:?}");
-        assert!(!row.contains("? help"), "{row:?}");
-        let row = render(&sample(Some((Severity::Warn, "careful"))), 120);
-        assert!(row.ends_with("Warning: careful"), "{row:?}");
+        assert_eq!(render(&view, 40).trim_end(), LEFT);
+        // Exactly the left plus gap plus state: state shown, no message.
+        let row = render(&view, 35 + 2 + 19);
+        assert_eq!(row, format!("{LEFT}  {STATE}"));
+        // Narrower than the left: the left is still not cut by us.
+        let line = status_line(&sample(None), 20);
+        assert_eq!(line.to_string(), LEFT);
     }
 
     #[test]
-    fn an_armed_prefix_shows_the_commands_even_with_a_message() {
+    fn a_wide_char_is_never_split() {
+        let view = sample(Some((Severity::Info, "ああああ")));
+        // Room for the message is width - 35 - 19 - 4.
+        let row = render(&view, 35 + 19 + 4 + 8);
+        assert!(row.contains("ああああ  LOG"), "{row:?}");
+        let row = render(&view, 35 + 19 + 4 + 7);
+        assert!(row.contains("ああ...  LOG"), "{row:?}");
+        let row = render(&view, 35 + 19 + 4 + 6);
+        assert!(row.contains("あ...  LOG"), "{row:?}");
+        let row = render(&view, 35 + 19 + 4 + 5);
+        assert!(row.contains("あ...  LOG"), "{row:?}");
+    }
+
+    #[test]
+    fn the_link_symbol_and_its_color_follow_the_state() {
+        let ui = sample(None).colors;
+        for (link, symbol, rgb) in [
+            (LinkState::Open, "*", ui.ok),
+            (LinkState::Opening, "~", ui.warn),
+            (LinkState::Lost, "!", ui.error),
+            (LinkState::Disconnected, "-", ui.muted),
+        ] {
+            let mut view = sample(None);
+            view.link = link;
+            let line = status_line(&view, 80);
+            assert_eq!(line.spans[0].content, symbol);
+            assert_eq!(line.spans[0].style.fg, Some(color(rgb)));
+            let row = render(&view, 80);
+            assert!(
+                row.starts_with(&format!("{symbol} /dev/ttyUSB0")),
+                "{row:?}"
+            );
+            for word in ["connected", "connecting", "lost", "disconnected"] {
+                assert!(!row.contains(word), "{row:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_armed_prefix_shows_the_commands_instead_of_state_and_message() {
         let mut view = sample(Some((Severity::Error, "port busy")));
         view.prefix = true;
-        let left = format!("PREFIX  {LEFT}");
         let row = render(&view, 120);
-        assert!(row.starts_with(&left), "{row:?}");
-        assert!(!row.contains("port busy"), "{row:?}");
-        // 120 - 73 = 47 cells: the full list (137) does not fit, the keys do,
-        // beside the normal left items.
+        assert!(row.starts_with(ARMED), "{row:?}");
+        assert!(!row.contains("port busy") && !row.contains("RX"), "{row:?}");
+        // 120 - 43 = 77 cells: the full list (146) does not fit, the keys do.
         assert!(row.ends_with(&format!("  {PREFIX_KEYS}")), "{row:?}");
-        assert!(!row.contains("..."), "{row:?}");
         assert_eq!(cells(&row), 120);
-        // Room for everything: the full list, no dots.
         let row = render(&view, 250);
         assert!(row.ends_with("q quit  Esc cancel"), "{row:?}");
         assert!(row.contains("c connect  d disconnect"), "{row:?}");
         assert!(!row.contains("..."), "{row:?}");
-        // The message returns once the prefix is released.
+        // The message and state return once the prefix is released.
         view.prefix = false;
-        assert!(render(&view, 120).ends_with("Error: port busy"));
+        assert_eq!(render(&view, 120), expected("ERR port busy", 120));
     }
 
     #[test]
     fn the_prefix_list_falls_back_to_keys_and_then_to_dots() {
         let mut view = sample(None);
         view.prefix = true;
-        let left = cells(&format!("PREFIX  {LEFT}"));
-        assert_eq!(left, 73);
+        let left = cells(ARMED);
         let keys = cells(PREFIX_KEYS);
         let full = cells(PREFIX_COMMANDS);
-        assert_eq!((keys, full), (31, 146));
-        // The widest row where the full list still fits, and one cell less.
+        assert_eq!((left, keys, full), (43, 31, 146));
         let row = render(&view, (left + 2 + full) as u16);
-        assert!(row.ends_with(&format!("  {PREFIX_COMMANDS}")), "{row:?}");
-        assert_eq!(cells(&row), left + 2 + full);
+        assert_eq!(row, format!("{ARMED}  {PREFIX_COMMANDS}"));
         let row = render(&view, (left + 1 + full) as u16);
+        assert!(row.starts_with("* PREFIX  /dev"), "{row:?}");
         assert!(row.ends_with(&format!("  {PREFIX_KEYS}")), "{row:?}");
         // The keys fit exactly beside the left items.
         let row = render(&view, (left + 2 + keys) as u16);
-        assert_eq!(row, format!("PREFIX  {LEFT}  {PREFIX_KEYS}"));
-        // At 80 columns the keys do not fit beside the left items (106
-        // needed), so the left side collapses to PREFIX and the keys follow.
+        assert_eq!(row, format!("{ARMED}  {PREFIX_KEYS}"));
         let row = render(&view, 80);
-        assert_eq!(
-            row,
-            format!("PREFIX{}{PREFIX_KEYS}", " ".repeat(80 - 6 - 31))
-        );
-        assert_eq!(cells(&row), 80);
+        let pad = " ".repeat(80 - left - keys);
+        assert_eq!(row, format!("{ARMED}{pad}{PREFIX_KEYS}"));
         // One cell short of the keys beside the left items: collapsed.
         let row = render(&view, (left + 1 + keys) as u16);
-        assert!(row.starts_with("PREFIX "), "{row:?}");
+        assert!(row.starts_with("* PREFIX "), "{row:?}");
         assert!(!row.contains("/dev/ttyUSB0"), "{row:?}");
         assert!(row.ends_with(PREFIX_KEYS), "{row:?}");
         // Collapsed rows: exact fit, then cut with dots, then nothing.
-        let row = render(&view, 6 + 2 + 31);
-        assert_eq!(row, format!("PREFIX  {PREFIX_KEYS}"));
-        let row = render(&view, 6 + 2 + 30);
-        assert_eq!(row, "PREFIX  c d r b l L s f u e p t ? q...");
-        let row = render(&view, 6 + 2 + 3 - 1);
-        assert_eq!(row.trim_end(), "PREFIX");
-        // The same session without the prefix keeps its left items whole.
-        let row = render(&sample(None), 80);
-        assert!(row.starts_with(LEFT), "{row:?}");
+        let row = render(&view, 8 + 2 + 31);
+        assert_eq!(row, format!("* PREFIX  {PREFIX_KEYS}"));
+        let row = render(&view, 8 + 2 + 30);
+        assert_eq!(row, "* PREFIX  c d r b l L s f u e p t ? q...");
+        let row = render(&view, 8 + 2 + 3 - 1);
+        assert_eq!(row.trim_end(), "* PREFIX");
     }
 
     #[test]
@@ -371,53 +431,23 @@ mod tests {
             let mut view = sample(Some((Severity::Error, "x")));
             view.colors = palette_by_name(name).unwrap().ui;
             let line = status_line(&view, 80);
-            let first = line.spans[0].style;
-            assert_eq!(first.bg, Some(color(view.colors.status_bg)), "{name}");
-            assert_ne!(first.fg, first.bg, "{name}");
-            let last = line.spans.last().unwrap().style;
-            assert_eq!(last.fg, Some(color(view.colors.error)), "{name}");
-            assert_ne!(last.fg, last.bg, "{name}");
+            for span in &line.spans {
+                assert_eq!(span.style.bg, Some(color(view.colors.status_bg)), "{name}");
+            }
+            let err = line.spans.iter().find(|s| s.content == "ERR x").unwrap();
+            assert_eq!(err.style.fg, Some(color(view.colors.error)), "{name}");
+            let state = line.spans.last().unwrap().style;
+            assert_eq!(state.fg, Some(color(view.colors.status_fg)), "{name}");
+            assert_ne!(state.fg, state.bg, "{name}");
+            view.message = Some((Severity::Warn, "x".into()));
+            let line = status_line(&view, 80);
+            let warn = line.spans.iter().find(|s| s.content == "WARN x").unwrap();
+            assert_eq!(warn.style.fg, Some(color(view.colors.warn)), "{name}");
         }
         let dark = status_line(&sample(None), 80).spans[0].style.bg;
         let mut light = sample(None);
         light.colors = palette_by_name("light").unwrap().ui;
         assert_ne!(dark, status_line(&light, 80).spans[0].style.bg);
-    }
-
-    #[test]
-    fn a_long_message_is_cut_with_three_dots_at_80() {
-        let view = sample(Some((
-            Severity::Error,
-            "Port is busy (opened by another process)",
-        )));
-        let row = render(&view, 80);
-        // 80 - 65 left cells = 15; 2 gap, 3 dots, 10 for text.
-        assert!(row.starts_with(LEFT), "{row:?}");
-        assert!(row.ends_with("  Error: Por..."), "{row:?}");
-        assert_eq!(cells(&row), 80);
-    }
-
-    #[test]
-    fn the_message_is_dropped_when_there_is_no_room_for_the_dots() {
-        let view = sample(Some((Severity::Warn, "broken")));
-        let left = cells(LEFT) as u16;
-        let row = render(&view, left + 4);
-        assert_eq!(row.trim_end(), LEFT);
-        let row = render(&view, left + 5);
-        assert_eq!(row.trim_end(), format!("{LEFT}  ..."));
-    }
-
-    #[test]
-    fn a_wide_char_is_never_split() {
-        let view = sample(Some((Severity::Info, "ああああ")));
-        let left = cells(LEFT) as u16;
-        // 2 gap + 3 dots + budget: 4 cells keep two wide chars, 3 and 2 keep one.
-        let row = render(&view, left + 9);
-        assert!(row.trim_end().ends_with("  ああ..."), "{row:?}");
-        let row = render(&view, left + 8);
-        assert!(row.trim_end().ends_with("  あ..."), "{row:?}");
-        let row = render(&view, left + 7);
-        assert!(row.trim_end().ends_with("  あ..."), "{row:?}");
     }
 
     #[test]

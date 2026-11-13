@@ -18,7 +18,7 @@ pub use config::{
     SerialSettings, Settings, TerminalSettings,
 };
 pub use theme::{
-    canonical_theme_name, contrast_ratio, default_palette, next_theme, palette_by_name, theme_list,
+    canonical_theme_name, contrast_ratio, default_palette, palette_by_name, theme_list,
     theme_names, TerminalPalette, UiColors, DEFAULT_THEME,
 };
 
