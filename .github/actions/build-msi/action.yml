@@ -1,0 +1,34 @@
+name: Build MSI
+description: Install WiX Toolset v5 and build the per-user rs-term MSI from a staged rs-term.exe.
+
+inputs:
+  exe:
+    description: Path to the rs-term.exe to package
+    required: true
+  out:
+    description: Path of the MSI to write
+    required: true
+  cert:
+    description: Public certificate (.cer) to ship in the install folder (signed releases only)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install WiX Toolset
+      shell: pwsh
+      run: |
+        dotnet tool install --global wix --version 5.0.2
+        if ($LASTEXITCODE -ne 0) { throw "wix install failed" }
+
+    - name: Build MSI
+      shell: pwsh
+      env:
+        EXE: ${{ inputs.exe }}
+        OUT: ${{ inputs.out }}
+        CERT: ${{ inputs.cert }}
+      run: |
+        $params = @{ Exe = $env:EXE; Out = $env:OUT }
+        if ($env:CERT) { $params.Cert = $env:CERT }
+        & "${{ github.workspace }}/.github/scripts/build-msi.ps1" @params

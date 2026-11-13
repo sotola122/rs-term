@@ -24,15 +24,49 @@ One process is one serial session. There are no built-in panes or tabs: run seve
 
 ## Installation
 
+### Windows installer (MSI)
+
+Each release has a signed per-user MSI, `rs-term-<tag>-x86_64-pc-windows-msvc.msi`. It needs no administrator rights and installs:
+
+- `rs-term.exe`, `LICENSE`, `NOTICE`, `README.md` and `rs-term-codesign.cer` (the public signing certificate) in `%LOCALAPPDATA%\Programs\rs-term`.
+- That folder on your **user** `PATH`, so `rs-term` works in new terminals. Uninstalling removes it again.
+- A Start menu shortcut named `rs-term`. rs-term is a console app, so Windows 11 opens it in your default terminal application (normally Windows Terminal; change it under Settings > System > For developers > Terminal).
+
+Installing a newer MSI replaces the older one (upgrade). The entry under "Installed apps" shows the publisher `sotola122` and the project URL. The `build` workflow also uploads an **unsigned** MSI as a workflow artifact on every push; it is for testing.
+
+#### Trusting the publisher (optional)
+
+The MSI and `rs-term.exe` are signed with a self-issued certificate, not one from a public authority. Windows therefore shows an unknown publisher (UAC or SmartScreen) until you trust it. The installer works either way. To trust it, download `rs-term-codesign.cer` and `rs-term-codesign.cer.txt` from the release. The text file lists the subject, issuer, validity and the SHA-256 and SHA-1 thumbprints; compare them with `certutil -hashfile rs-term-codesign.cer SHA256` (and `SHA1`). Then run in PowerShell:
+
+```powershell
+Import-Certificate -FilePath rs-term-codesign.cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher
+Import-Certificate -FilePath rs-term-codesign.cer -CertStoreLocation Cert:\CurrentUser\Root
+```
+
+- `TrustedPublisher` marks software signed by this certificate as coming from a publisher you accept.
+- `Root` makes the certificate a trusted root for your account, so the signature validates as a whole. Windows asks you to confirm this one. Only do it if you trust the certificate, because it applies to anything that chains to it.
+
+Both steps are per user and can be undone by deleting the certificate from those stores.
+
+To check a signature:
+
+```powershell
+Get-AuthenticodeSignature .\rs-term-<tag>-x86_64-pc-windows-msvc.msi | Format-List Status, StatusMessage, SignerCertificate
+```
+
+Without the certificate in the stores above, `Status` is `UnknownError` (the chain does not end at a trusted root); the signer thumbprint must match the SHA-1 value in `rs-term-codesign.cer.txt`.
+
 ### Prebuilt binaries
 
-Pushing a tag that matches `v*` runs the `release` workflow. It runs fmt, clippy and the tests, builds release binaries for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`, and creates a **draft** GitHub release (the workflow does not publish it). The release assets are:
+Pushing a tag that matches `v*` runs the `release` workflow. It runs fmt, clippy and the tests, builds release binaries for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`, signs `rs-term.exe`, builds and signs the MSI, and creates a **draft** GitHub release (the workflow does not publish it). The release assets are:
 
-- `rs-term-<tag>-x86_64-pc-windows-msvc.exe`
+- `rs-term-<tag>-x86_64-pc-windows-msvc.msi` (signed)
+- `rs-term-<tag>-x86_64-pc-windows-msvc.exe` (signed)
+- `rs-term-codesign.cer` and `rs-term-codesign.cer.txt` (its fingerprints)
 - `rs-term-<tag>-x86_64-unknown-linux-gnu`
 - `LICENSE` and `NOTICE`
 
-Whether a release has been published is up to the maintainer. The `build` workflow also uploads the same binaries as workflow artifacts on every push.
+Whether a release has been published is up to the maintainer. The `build` workflow also uploads the same binaries (and the unsigned MSI) as workflow artifacts on every push.
 
 ### Build from source
 
@@ -239,12 +273,23 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 ```
 
-The `test` workflow runs these three commands on `windows-latest` and `ubuntu-latest` for every push and pull request. The `build` workflow builds release binaries for both targets on every push.
+The `test` workflow runs these three commands on `windows-latest` and `ubuntu-latest` for every push and pull request. The `build` workflow builds release binaries for both targets and the unsigned MSI on every push, and checks the signing script with a throwaway certificate.
 
 Workspace layout:
 
 - `crates/rs-term-core`: serial I/O, session, terminal screen, codecs, logging and settings. No UI code.
 - `crates/rs-term`: the ratatui/crossterm frontend (command line, keys, status line, view).
+
+### Maintainer notes: code signing and the MSI
+
+The `release` workflow fails unless two repository secrets exist. Create a code-signing certificate as a PFX (for example with `New-SelfSignedCertificate -Type CodeSigningCert` and `Export-PfxCertificate`), then:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('codesign.pfx')) | gh secret set WINDOWS_SIGN_PFX_BASE64
+gh secret set WINDOWS_SIGN_PFX_PASSWORD
+```
+
+`.github/scripts/sign.ps1` decodes the PFX to a temporary file, signs with `signtool` (SHA-256, timestamp server `http://timestamp.digicert.com`, override with `SIGN_TIMESTAMP_URL`), exports the public certificate as `rs-term-codesign.cer`, and deletes the temporary PFX. The release tag must be `v` plus the version in `crates/rs-term/Cargo.toml`, or the workflow stops before building. Keep the same certificate across releases so the trust steps above are done once. The MSI source is `installer/rs-term.wxs` (WiX Toolset 5.0.2, installed with `dotnet tool install --global wix --version 5.0.2`); its `UpgradeCode` must never change. `.github/scripts/build-msi.ps1` builds it, taking the version from `crates/rs-term/Cargo.toml`.
 
 ## License
 

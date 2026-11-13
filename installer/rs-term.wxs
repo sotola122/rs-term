@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Per-user MSI for rs-term (WiX Toolset v5). Build it with:
+
+    wix build installer/rs-term.wxs -arch x64 -o rs-term.msi
+      -d Version=0.1.0 -d ExePath=path\to\rs-term.exe -d RepoRoot=.
+      [-d CertPath=path\to\rs-term-codesign.cer]
+
+  Version must be numeric (x.y.z). CertPath is only passed for a signed
+  release; without it the .cer file is not part of the package.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="rs-term"
+      Manufacturer="sotola122"
+      Version="$(Version)"
+      UpgradeCode="46B466F8-858E-4F99-B0D5-325717204FE3"
+      Language="1033"
+      Scope="perUser"
+      Compressed="yes">
+
+    <SummaryInformation Description="rs-term - full-screen serial terminal" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of rs-term is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/sotola122/rs-term" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/sotola122/rs-term" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/sotola122/rs-term/releases" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="rs-term" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="rs-term" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <!-- One component: the files, shortcut and user PATH entry are installed and
+           removed together. The HKCU value is the key path (per-user rule). -->
+      <Component Id="AppComponent" Guid="CA08E745-3082-4A90-9DB0-B9596CCD79CC">
+        <RegistryValue Root="HKCU" Key="Software\sotola122\rs-term" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="RsTermExe" Source="$(ExePath)" Name="rs-term.exe" />
+        <File Id="LicenseFile" Source="$(RepoRoot)\LICENSE" Name="LICENSE" />
+        <File Id="NoticeFile" Source="$(RepoRoot)\NOTICE" Name="NOTICE" />
+        <File Id="ReadmeFile" Source="$(RepoRoot)\README.md" Name="README.md" />
+<?ifdef CertPath ?>
+        <File Id="CodeSignCert" Source="$(CertPath)" Name="rs-term-codesign.cer" />
+<?endif?>
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+        <!-- The target is a console app: Windows 11 opens it in the default
+             terminal application (normally Windows Terminal). No terminal is
+             named here on purpose. -->
+        <Shortcut Id="RsTermShortcut" Directory="ProgramMenuFolder" Name="rs-term" Description="Full-screen serial terminal" Target="[#RsTermExe]" WorkingDirectory="INSTALLFOLDER" />
+        <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" System="no" Permanent="no" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
