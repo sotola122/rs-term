@@ -96,7 +96,9 @@ impl Default for Settings {
 
 /// Every table and key is optional: an omitted one takes the built-in
 /// default. The GUI-era keys the TUI never read are still accepted (and
-/// silently ignored) so an old file keeps loading.
+/// silently ignored) so an old file keeps loading. They are `_`-prefixed
+/// `IgnoredAny` fields, renamed to the old key, so they are never read and
+/// never flagged as dead code.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSettings {
@@ -111,10 +113,10 @@ struct RawSettings {
     terminal: RawTerminal,
     #[serde(default)]
     log: RawLog,
-    #[allow(dead_code)] // accepted and ignored
-    ui: Option<IgnoredAny>,
-    #[allow(dead_code)] // accepted and ignored
-    layout: Option<IgnoredAny>,
+    #[serde(rename = "ui")]
+    _ui: Option<IgnoredAny>,
+    #[serde(rename = "layout")]
+    _layout: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -128,10 +130,10 @@ struct RawSerial {
     dtr: Option<String>,
     rts: Option<String>,
     read_timeout_ms: Option<u64>,
-    #[allow(dead_code)] // accepted and ignored
-    reconnect: Option<IgnoredAny>,
-    #[allow(dead_code)] // accepted and ignored
-    reopen_on_start: Option<IgnoredAny>,
+    #[serde(rename = "reconnect")]
+    _reconnect: Option<IgnoredAny>,
+    #[serde(rename = "reopen_on_start")]
+    _reopen_on_start: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -156,12 +158,12 @@ struct RawTerminal {
     local_echo: Option<bool>,
     palette: Option<String>,
     ambiguous_width: Option<String>,
-    #[allow(dead_code)] // accepted and ignored
-    font_family: Option<IgnoredAny>,
-    #[allow(dead_code)] // accepted and ignored
-    font_size_px: Option<IgnoredAny>,
-    #[allow(dead_code)] // accepted and ignored
-    font_fallbacks: Option<IgnoredAny>,
+    #[serde(rename = "font_family")]
+    _font_family: Option<IgnoredAny>,
+    #[serde(rename = "font_size_px")]
+    _font_size_px: Option<IgnoredAny>,
+    #[serde(rename = "font_fallbacks")]
+    _font_fallbacks: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
