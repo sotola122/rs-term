@@ -552,13 +552,12 @@ impl Screen {
         self.feed_utf8(&decoded)
     }
 
-    /// End of a connection: an incomplete lead becomes U+FFFD, a held CR is
-    /// completed, and the parser forgets a half escape sequence. The charset
-    /// state stays, because `Term` keeps it too.
+    /// End of a connection: an incomplete lead becomes U+FFFD, and the parser
+    /// forgets a half escape sequence. The charset state stays, because `Term`
+    /// keeps it too.
     pub(crate) fn finish_stream(&mut self) -> ApplyOutcome {
         let flushed = self.codec.reset();
-        let mut converted = self.newlines.push(&flushed);
-        converted.extend(self.newlines.finish());
+        let converted = self.newlines.push(&flushed);
         let outcome = self.feed_converted(&converted);
         self.parser = Processor::new();
         outcome
@@ -569,11 +568,8 @@ impl Screen {
         self.feed_utf8(&flushed)
     }
 
-    pub(crate) fn set_newline(&mut self, newline: Newline) -> ApplyOutcome {
-        let held = self.newlines.finish();
-        let outcome = self.feed_converted(&held);
+    pub(crate) fn set_newline(&mut self, newline: Newline) {
         self.newlines.set_mode(newline.receive);
-        outcome
     }
 
     fn feed_utf8(&mut self, decoded: &[u8]) -> ApplyOutcome {
@@ -825,6 +821,31 @@ mod tests {
         let mut screen = screen();
         screen.apply_bytes(b"hello\r\n");
         assert_eq!(screen.visible_rows()[0], "hello");
+    }
+
+    #[test]
+    fn auto_newline_keeps_a_redrawn_prompt_on_one_row() {
+        let mut screen = Screen::new(
+            80,
+            24,
+            1000,
+            SessionEncoding::Utf8,
+            Newline {
+                receive: ReceiveNewline::Auto,
+                transmit: TransmitNewline::Cr,
+            },
+            false,
+        );
+        screen.apply_bytes(b"line one\r\nline two\nnexia> ");
+        let mut typed = String::new();
+        for ch in "serial".chars() {
+            typed.push(ch);
+            let redraw = format!("\rnexia> {typed}\x1b[0K\r\x1b[{}C", 7 + typed.len());
+            screen.apply_bytes(redraw.as_bytes());
+        }
+        let rows = screen.visible_rows();
+        assert_eq!(&rows[..3], ["line one", "line two", "nexia> serial"]);
+        assert!(rows[3..].iter().all(|row| row.is_empty()));
     }
 
     #[test]

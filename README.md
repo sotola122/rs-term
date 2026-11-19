@@ -205,7 +205,7 @@ rts = "off"                 # on, off: RTS level after opening (ignored with rts
 read_timeout_ms = 20        # 1..=100
 
 [newline]
-receive = "auto"            # cr, crlf, lf, auto
+receive = "auto"            # cr, crlf, lf, auto (see Newlines)
 transmit = "cr"             # cr, crlf, lf
 
 [encoding]
@@ -227,6 +227,17 @@ rotate_keep = 5             # 1..=20
 text_encoding = "utf-8"     # utf-8 only
 ```
 
+
+## Newlines
+
+`receive` under `[newline]` decides how line endings from the device are shown:
+
+- `auto` (the default): recognizes CRLF and LF line endings. CRLF is shown as is, and a bare LF gets a CR added (LF-only devices). A lone CR only returns to the start of the line, so line editors, progress bars and spinners that redraw with CR work. For a device that ends lines with CR only, use `crlf`.
+- `cr`: bytes are shown as received; CR is only a carriage return and LF only moves down one line.
+- `crlf`: every CR is followed by an LF.
+- `lf`: every LF is preceded by a CR.
+
+`transmit` sets what Enter sends: `cr`, `crlf` or `lf`.
 
 ## Themes
 
